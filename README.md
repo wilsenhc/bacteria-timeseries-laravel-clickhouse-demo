@@ -17,14 +17,14 @@ not wired up yet.
 The connection is defined in `config/database.php` as `clickhouse` and is used through
 `DB::connection('clickhouse')`. It is never the default connection.
 
-| Variable | Local (lerd) | Description |
-| --- | --- | --- |
-| `CLICKHOUSE_HOST` | `lerd-clickhouse` | HTTP host |
-| `CLICKHOUSE_PORT` | `8123` | HTTP port |
+| Variable              | Local (lerd)                          | Description   |
+| --------------------- | ------------------------------------- | ------------- |
+| `CLICKHOUSE_HOST`     | `lerd-clickhouse`                     | HTTP host     |
+| `CLICKHOUSE_PORT`     | `8123`                                | HTTP port     |
 | `CLICKHOUSE_DATABASE` | `bacteria_timeseries_laravel_example` | Database name |
-| `CLICKHOUSE_USERNAME` | `lerd` | User |
-| `CLICKHOUSE_PASSWORD` | `lerd` | Password |
-| `CLICKHOUSE_HTTPS` | `false` | Use TLS |
+| `CLICKHOUSE_USERNAME` | `lerd`                                | User          |
+| `CLICKHOUSE_PASSWORD` | `lerd`                                | Password      |
+| `CLICKHOUSE_HTTPS`    | `false`                               | Use TLS       |
 
 ### lerd
 
