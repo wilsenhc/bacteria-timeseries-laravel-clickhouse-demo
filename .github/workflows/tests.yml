@@ -13,6 +13,61 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: bacteria_timeseries_laravel_example
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: lerd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      clickhouse:
+        image: clickhouse:26.3
+        env:
+          CLICKHOUSE_DB: bacteria_timeseries_laravel_example
+          CLICKHOUSE_USER: lerd
+          CLICKHOUSE_PASSWORD: lerd
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "clickhouse-client --user lerd --password lerd --query 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: bacteria_timeseries_laravel_example
+      DB_USERNAME: root
+      DB_PASSWORD: lerd
+      REDIS_HOST: 127.0.0.1
+      CLICKHOUSE_HOST: 127.0.0.1
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DATABASE: bacteria_timeseries_laravel_example
+      CLICKHOUSE_USERNAME: lerd
+      CLICKHOUSE_PASSWORD: lerd
+      CLICKHOUSE_HTTPS: false
+
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
