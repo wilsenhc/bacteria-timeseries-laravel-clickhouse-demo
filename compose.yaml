@@ -17,6 +17,8 @@ services:
             XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
             XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
             IGNITION_LOCAL_SITES_PATH: '${PWD}'
+            CLICKHOUSE_HOST: 'clickhouse'
+            CLICKHOUSE_PORT: '8123'
         volumes:
             - '.:/var/www/html'
         networks:
@@ -24,6 +26,7 @@ services:
         depends_on:
             - pgsql
             - redis
+            - clickhouse
     pgsql:
         image: 'postgres:18-alpine'
         ports:
@@ -64,6 +67,31 @@ services:
                 - ping
             retries: 3
             timeout: 5s
+    clickhouse:
+        image: 'clickhouse:26.3'
+        ports:
+            - '${FORWARD_CLICKHOUSE_PORT:-8124}:8123'
+        environment:
+            CLICKHOUSE_DB: '${CLICKHOUSE_DATABASE}'
+            CLICKHOUSE_USER: '${CLICKHOUSE_USERNAME}'
+            CLICKHOUSE_PASSWORD: '${CLICKHOUSE_PASSWORD}'
+            CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+        volumes:
+            - 'sail-clickhouse:/var/lib/clickhouse'
+            - 'sail-clickhouse-logs:/var/log/clickhouse-server'
+        ulimits:
+            nofile:
+                soft: 262144
+                hard: 262144
+        networks:
+            - sail
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1"'
+            interval: 10s
+            retries: 10
+            timeout: 5s
 networks:
     sail:
         driver: bridge
@@ -71,4 +99,8 @@ volumes:
     sail-pgsql:
         driver: local
     sail-redis:
+        driver: local
+    sail-clickhouse:
+        driver: local
+    sail-clickhouse-logs:
         driver: local

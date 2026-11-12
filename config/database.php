@@ -99,6 +99,20 @@ return [
             'sslmode' => env('DB_SSLMODE', 'prefer'),
         ],
 
+        'clickhouse' => [
+            'driver' => 'clickhouse',
+            'host' => env('CLICKHOUSE_HOST', '127.0.0.1'),
+            'port' => env('CLICKHOUSE_PORT', 8123),
+            'database' => env('CLICKHOUSE_DATABASE', 'default'),
+            'username' => env('CLICKHOUSE_USERNAME', 'default'),
+            'password' => env('CLICKHOUSE_PASSWORD', ''),
+            'https' => env('CLICKHOUSE_HTTPS', false),
+            'transport' => env('CLICKHOUSE_TRANSPORT', 'guzzle'),
+            'timeout' => env('CLICKHOUSE_TIMEOUT', 30),
+            'connect_timeout' => env('CLICKHOUSE_CONNECT_TIMEOUT', 5),
+            'datetime_precision' => env('CLICKHOUSE_DATETIME_PRECISION', 'second'),
+        ],
+
         'sqlsrv' => [
             'driver' => 'sqlsrv',
             'url' => env('DB_URL'),

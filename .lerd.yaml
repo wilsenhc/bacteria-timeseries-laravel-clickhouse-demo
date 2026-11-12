@@ -3,6 +3,7 @@ framework: laravel
 framework_version: "13"
 secured: true
 services:
+  - clickhouse
   - mailpit
   - postgres
   - redis
