@@ -30,7 +30,7 @@ export function isoWeeksInYear(year: number): number {
 }
 
 export function parseIsoWeek(value: string | null | undefined): IsoWeek | null {
-    const match = value?.match(/^(\d{4})-W(\d{2})$/);
+    const match = value?.match(/^(\d{4})(\d{2})$/);
 
     if (!match) {
         return null;

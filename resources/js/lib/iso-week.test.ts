@@ -31,13 +31,14 @@ describe('isoWeeksInYear', () => {
 });
 
 describe('parseIsoWeek', () => {
-    it('parses a valid ISO yearweek', () => {
-        expect(parseIsoWeek('2026-W46')).toEqual({ year: 2026, week: 46 });
+    it('parses a valid compact ISO yearweek', () => {
+        expect(parseIsoWeek('202646')).toEqual({ year: 2026, week: 46 });
     });
 
     it('rejects malformed or non-existent weeks', () => {
-        expect(parseIsoWeek('2026-W54')).toBeNull();
-        expect(parseIsoWeek('2021-W53')).toBeNull();
+        expect(parseIsoWeek('202654')).toBeNull();
+        expect(parseIsoWeek('202153')).toBeNull();
+        expect(parseIsoWeek('2026-W46')).toBeNull();
         expect(parseIsoWeek('2026-46')).toBeNull();
         expect(parseIsoWeek(null)).toBeNull();
     });

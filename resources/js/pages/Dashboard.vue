@@ -66,11 +66,15 @@ const isoWeekLabel = computed(
     () => `${selectedYear.value}-W${selectedWeek.value.padStart(2, '0')}`,
 );
 
+const isoWeekParam = computed(
+    () => `${selectedYear.value}${selectedWeek.value.padStart(2, '0')}`,
+);
+
 watch(
     [selectedYear, selectedWeek],
     () => {
         const url = new URL(window.location.href);
-        url.searchParams.set('yearweek', isoWeekLabel.value);
+        url.searchParams.set('yearweek', isoWeekParam.value);
         window.history.replaceState(window.history.state, '', url);
     },
     { immediate: true },
