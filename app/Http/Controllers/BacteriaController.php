@@ -14,7 +14,9 @@ class BacteriaController extends Controller
     public function index(): Response
     {
         return Inertia::render('bacteria/Index', [
-            'bacteria' => Bacteria::query()->orderBy('name')->get(),
+            'bacteria' => Bacteria::query()
+                ->orderBy('name')
+                ->get(['id', 'name', 'short_name', 'description', 'color', 'icon']),
         ]);
     }
 

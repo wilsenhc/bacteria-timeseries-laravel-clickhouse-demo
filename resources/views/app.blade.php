@@ -22,13 +22,16 @@
         {{-- Inline style to set the HTML background color based on our theme in app.css --}}
         <style>
             html {
-                background-color: oklch(1 0 0);
+                background-color: #f4f4f1;
             }
 
             html.dark {
-                background-color: oklch(0.145 0 0);
+                background-color: #0e1011;
             }
         </style>
+
+        <meta name="theme-color" content="#f4f4f1" media="(prefers-color-scheme: light)">
+        <meta name="theme-color" content="#0e1011" media="(prefers-color-scheme: dark)">
 
         <link rel="icon" href="/favicon.ico" sizes="any">
         <link rel="icon" href="/favicon.svg" type="image/svg+xml">

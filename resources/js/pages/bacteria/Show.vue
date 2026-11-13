@@ -2,6 +2,7 @@
 import { Head, Link } from '@inertiajs/vue3';
 import { ArrowLeft } from '@lucide/vue';
 import BacteriaIcon from '@/components/BacteriaIcon.vue';
+import CulturePlate from '@/components/CulturePlate.vue';
 import { index } from '@/routes/bacteria';
 import type { Bacteria } from '@/types/bacteria';
 
@@ -28,52 +29,96 @@ defineOptions({
 <template>
     <Head :title="bacteria.name" />
 
-    <div class="flex flex-col gap-6 p-4">
+    <div class="mx-auto flex w-full max-w-[1280px] flex-col gap-6 p-4 md:p-6">
         <Link
             :href="index()"
             class="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
             <ArrowLeft class="size-4" />
-            All bacteria
+            Atlas
         </Link>
 
         <div
-            class="flex flex-col gap-6 rounded-xl border border-sidebar-border/70 p-6 sm:flex-row dark:border-sidebar-border"
+            class="grid gap-6 lg:grid-cols-[1.05fr_0.95fr] lg:gap-10"
+            :style="{ '--bacteria-color': bacteria.color }"
         >
-            <span
-                class="flex size-20 shrink-0 items-center justify-center rounded-2xl"
-                :style="{
-                    color: bacteria.color,
-                    backgroundColor: `${bacteria.color}1a`,
-                }"
+            <section
+                class="surface-card animate-rise flex flex-col justify-center p-6 md:p-8"
             >
-                <BacteriaIcon :icon="bacteria.icon" class="size-10" />
-            </span>
+                <p class="eyebrow">Isolate / {{ bacteria.short_name }}</p>
+                <h1
+                    class="mt-4 text-[clamp(2.25rem,4vw,3rem)] leading-[1.05] font-bold tracking-[-0.03em]"
+                >
+                    {{ bacteria.name }}
+                </h1>
 
-            <div class="space-y-3">
-                <div class="flex flex-wrap items-baseline gap-x-3">
-                    <h1 class="text-2xl font-semibold tracking-tight">
-                        {{ bacteria.name }}
-                    </h1>
-                    <span class="text-sm text-muted-foreground">
+                <div class="mt-4 flex flex-wrap items-center gap-3">
+                    <span
+                        class="bacteria-color inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs font-medium"
+                    >
+                        <span
+                            class="size-2 rounded-full"
+                            :style="{ backgroundColor: bacteria.color }"
+                        />
                         {{ bacteria.short_name }}
                     </span>
+                    <span class="tech uppercase">{{ bacteria.icon }}</span>
                 </div>
 
-                <p class="max-w-prose text-muted-foreground">
+                <p
+                    class="mt-6 max-w-[58ch] text-base leading-relaxed text-muted-foreground"
+                >
                     {{ bacteria.description }}
                 </p>
 
-                <p
-                    class="flex items-center gap-2 font-mono text-xs text-muted-foreground"
+                <dl
+                    class="mt-8 grid grid-cols-1 gap-px border border-border bg-border sm:grid-cols-3"
                 >
-                    <span
-                        class="size-3 rounded-full"
-                        :style="{ backgroundColor: bacteria.color }"
+                    <div class="bg-card p-4">
+                        <dt class="tech uppercase">Morphology</dt>
+                        <dd class="mt-2 flex items-center gap-2 text-sm">
+                            <BacteriaIcon
+                                :icon="bacteria.icon"
+                                class="bacteria-color size-4"
+                            />
+                            {{ bacteria.icon }}
+                        </dd>
+                    </div>
+                    <div class="bg-card p-4">
+                        <dt class="tech uppercase">Swatch</dt>
+                        <dd class="mt-2 flex items-center gap-2">
+                            <span
+                                class="size-3 rounded-full"
+                                :style="{ backgroundColor: bacteria.color }"
+                            />
+                            <span class="font-mono text-xs">
+                                {{ bacteria.color }}
+                            </span>
+                        </dd>
+                    </div>
+                    <div class="bg-card p-4">
+                        <dt class="tech uppercase">Domain</dt>
+                        <dd class="mt-2 text-sm">Bacteria</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section
+                class="animate-rise flex items-center justify-center [animation-delay:160ms]"
+            >
+                <div class="w-full max-w-md">
+                    <CulturePlate
+                        :items="[
+                            {
+                                icon: bacteria.icon,
+                                color: bacteria.color,
+                            },
+                        ]"
+                        :label="bacteria.short_name"
+                        :code="`#${String(bacteria.id).padStart(3, '0')}`"
                     />
-                    {{ bacteria.color }}
-                </p>
-            </div>
+                </div>
+            </section>
         </div>
     </div>
 </template>

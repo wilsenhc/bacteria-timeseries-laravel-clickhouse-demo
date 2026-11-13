@@ -12,8 +12,8 @@ export default defineConfig({
             input: ['resources/css/app.css', 'resources/js/app.ts'],
             refresh: true,
             fonts: [
-                bunny('Instrument Sans', {
-                    weights: [400, 500, 600],
+                bunny('JetBrains Mono', {
+                    weights: [400, 500],
                 }),
             ],
         }),
@@ -68,6 +68,7 @@ export default defineConfig({
         htmlWhitespaceSensitivity: 'css',
         ignorePatterns: [
             '.github/**',
+            'DESIGN.md',
             'composer.json',
             'resources/js/components/ui/*',
             'resources/views/mail/*',
