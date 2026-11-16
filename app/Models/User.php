@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Enums\OrganizationRole;
 use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -33,6 +35,26 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
 {
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable, PasskeyAuthenticatable, TwoFactorAuthenticatable;
+
+    /**
+     * @return BelongsToMany<Organization, $this, OrganizationMembership, 'pivot'>
+     */
+    public function organizations(): BelongsToMany
+    {
+        return $this->belongsToMany(Organization::class)
+            ->using(OrganizationMembership::class)
+            ->withPivot('role')
+            ->withTimestamps();
+    }
+
+    public function roleIn(Organization $organization): ?OrganizationRole
+    {
+        $membership = $this->organizations()
+            ->whereKey($organization->id)
+            ->first();
+
+        return $membership?->pivot->role;
+    }
 
     /**
      * Get the attributes that should be cast.

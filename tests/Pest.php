@@ -1,5 +1,12 @@
 <?php
 
+use App\Actions\CreateLab;
+use App\Enums\GrowthLevel;
+use App\Models\Bacteria;
+use App\Models\Lab;
+use App\Models\Observation;
+use App\Models\Organization;
+use App\Models\Sample;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -47,4 +54,51 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+function createLabWithHierarchy(
+    Organization $organization,
+    int $rows = 2,
+    int $shelves = 2,
+    int $levels = 2,
+): Lab {
+    return app(CreateLab::class)->handle($organization, [
+        'name' => fake()->unique()->words(2, true),
+        'code' => null,
+        'notes' => null,
+        'row_count' => $rows,
+        'shelves_per_row' => $shelves,
+        'levels_per_shelf' => $levels,
+    ]);
+}
+
+function createSample(Lab $lab, string $code = 'R1-S1-L1-01'): Sample
+{
+    $level = $lab->rows()->first()->shelves()->first()->levels()->first();
+
+    return Sample::create([
+        'lab_id' => $lab->id,
+        'lab_level_id' => $level->id,
+        'code' => $code,
+    ]);
+}
+
+function createObservation(
+    Sample $sample,
+    string $observedAt,
+    Bacteria $bacteria,
+    GrowthLevel|int $value,
+): Observation {
+    $observation = Observation::create([
+        'sample_id' => $sample->id,
+        'observed_at' => $observedAt,
+    ]);
+
+    $observation->bacteriaObservations()->create([
+        'bacteria_id' => $bacteria->id,
+        'growth_level' => $value instanceof GrowthLevel ? $value : null,
+        'count' => $value instanceof GrowthLevel ? null : $value,
+    ]);
+
+    return $observation;
 }

@@ -5,7 +5,8 @@ import AppLogoIcon from '@/components/AppLogoIcon.vue';
 import BacteriaIcon from '@/components/BacteriaIcon.vue';
 import CulturePlate from '@/components/CulturePlate.vue';
 import { buttonVariants } from '@/components/ui/button';
-import { dashboard, home, login, register } from '@/routes';
+import { home, login, register } from '@/routes';
+import { index as labs } from '@/routes/labs';
 import {
     index as bacteriaIndex,
     show as bacteriaShow,
@@ -62,10 +63,10 @@ defineProps<{
                 <nav class="flex items-center gap-2">
                     <template v-if="$page.props.auth.user">
                         <Link
-                            :href="dashboard()"
+                            :href="labs()"
                             :class="buttonVariants({ size: 'sm' })"
                         >
-                            Open dashboard
+                            Open labs
                         </Link>
                     </template>
                     <template v-else>
@@ -112,10 +113,10 @@ defineProps<{
                     <div class="mt-8 flex flex-wrap gap-3">
                         <template v-if="$page.props.auth.user">
                             <Link
-                                :href="dashboard()"
+                                :href="labs()"
                                 :class="buttonVariants({ size: 'lg' })"
                             >
-                                Open dashboard
+                                Open labs
                                 <ArrowRight class="size-4" />
                             </Link>
                             <Link
@@ -342,9 +343,9 @@ defineProps<{
                         <p
                             class="mt-4 max-w-[48ch] text-sm leading-relaxed text-muted-foreground"
                         >
-                            Observations belong to an ISO week. Scope the
-                            dashboard to a single window and the atlas stays a
-                            record you can actually read.
+                            Observations belong to an ISO week. Scope the lab
+                            map to a single window and the atlas stays a record
+                            you can actually read.
                         </p>
 
                         <ul class="mt-8 grid gap-4">

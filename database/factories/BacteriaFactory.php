@@ -32,6 +32,7 @@ class BacteriaFactory extends Factory
                 'spore',
                 'flagellum',
             ]),
+            'observation_type' => fake()->randomElement(['level', 'count']),
         ];
     }
 }

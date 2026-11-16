@@ -24,7 +24,7 @@ const page = usePage();
         <AppContent variant="sidebar" class="min-w-0 overflow-x-clip">
             <AppSidebarHeader :breadcrumbs="breadcrumbs" />
             <Transition name="page" mode="out-in">
-                <div :key="page.url" class="flex min-h-0 flex-1 flex-col">
+                <div :key="page.component" class="flex min-h-0 flex-1 flex-col">
                     <slot />
                 </div>
             </Transition>

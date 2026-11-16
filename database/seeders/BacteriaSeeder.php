@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Enums\BacteriaObservationType;
 use App\Models\Bacteria;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -22,6 +23,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in poultry, eggs, raw meat and produce; the classic cause of foodborne outbreaks.',
                 'color' => '#E63946',
                 'icon' => 'flagellum',
+                'observation_type' => BacteriaObservationType::Level->value,
             ],
             [
                 'name' => 'Escherichia coli',
@@ -29,6 +31,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in undercooked beef, raw milk, leafy greens and sprouts; some strains (O157:H7) cause severe illness.',
                 'color' => '#F4A261',
                 'icon' => 'rod',
+                'observation_type' => BacteriaObservationType::Level->value,
             ],
             [
                 'name' => 'Listeria monocytogenes',
@@ -36,6 +39,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in soft cheeses, deli meats, smoked fish and unpasteurized dairy; grows even at fridge temperatures.',
                 'color' => '#6A4C93',
                 'icon' => 'rod',
+                'observation_type' => BacteriaObservationType::Level->value,
             ],
             [
                 'name' => 'Campylobacter',
@@ -43,6 +47,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in raw chicken; one of the most common bacterial causes of gastroenteritis.',
                 'color' => '#2A9D8F',
                 'icon' => 'spiral',
+                'observation_type' => BacteriaObservationType::Level->value,
             ],
             [
                 'name' => 'Staphylococcus aureus',
@@ -50,6 +55,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in handled foods left at room temperature, such as sandwiches, cream pastries and potato salad.',
                 'color' => '#E9C46A',
                 'icon' => 'cluster',
+                'observation_type' => BacteriaObservationType::Level->value,
             ],
             [
                 'name' => 'Bacillus cereus',
@@ -57,6 +63,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in cooked rice and pasta left out at room temperature; causes the so-called fried rice syndrome.',
                 'color' => '#8D99AE',
                 'icon' => 'spore',
+                'observation_type' => BacteriaObservationType::Level->value,
             ],
             [
                 'name' => 'Clostridium perfringens',
@@ -64,6 +71,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in stews, gravies and meat dishes cooled slowly in bulk.',
                 'color' => '#BC4749',
                 'icon' => 'rod',
+                'observation_type' => BacteriaObservationType::Count->value,
             ],
             [
                 'name' => 'Clostridium botulinum',
@@ -71,6 +79,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in home-canned low-acid foods and honey; produces a toxin that causes botulism.',
                 'color' => '#3D405B',
                 'icon' => 'spore',
+                'observation_type' => BacteriaObservationType::Count->value,
             ],
             [
                 'name' => 'Vibrio',
@@ -78,6 +87,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in raw or undercooked seafood, especially oysters; V. vulnificus is the most dangerous.',
                 'color' => '#457B9D',
                 'icon' => 'comma',
+                'observation_type' => BacteriaObservationType::Count->value,
             ],
             [
                 'name' => 'Yersinia enterocolitica',
@@ -85,6 +95,7 @@ class BacteriaSeeder extends Seeder
                 'description' => 'Found in pork and unpasteurized milk; causes enterocolitis and can mimic appendicitis.',
                 'color' => '#588157',
                 'icon' => 'rod',
+                'observation_type' => BacteriaObservationType::Count->value,
             ],
         ];
 

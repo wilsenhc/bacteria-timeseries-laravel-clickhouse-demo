@@ -2,7 +2,9 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Organization;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Inertia\Middleware;
 
 class HandleInertiaRequests extends Middleware
@@ -41,7 +43,34 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
+            'organizationSwitch' => fn (): array => $this->organizationSwitch($request),
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
+        ];
+    }
+
+    /**
+     * The selected organization and the organizations the user can switch to.
+     *
+     * @return array{selected: array{id: int, name: string}|null, options: array<int, array{id: int, name: string}>}
+     */
+    private function organizationSwitch(Request $request): array
+    {
+        $selected = $request->attributes->get('selectedOrganization');
+        $organizations = $request->attributes->get('userOrganizations');
+
+        return [
+            'selected' => $selected instanceof Organization
+                ? ['id' => $selected->id, 'name' => $selected->name]
+                : null,
+            'options' => $organizations instanceof Collection
+                ? $organizations
+                    ->map(fn (Organization $organization): array => [
+                        'id' => $organization->id,
+                        'name' => $organization->name,
+                    ])
+                    ->values()
+                    ->all()
+                : [],
         ];
     }
 }
