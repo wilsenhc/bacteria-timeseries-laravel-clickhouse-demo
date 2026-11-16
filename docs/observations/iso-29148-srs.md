@@ -1,0 +1,1549 @@
+# Software Requirements Specification
+
+## Observations Module — Bacteria Timeseries
+
+| Field              | Value                                                             |
+| ------------------ | ----------------------------------------------------------------- |
+| Document ID        | SRS-OBS-001                                                       |
+| Version            | 1.2                                                               |
+| Date               | 2026-11-13                                                        |
+| Status             | Draft for approval                                                |
+| Standard           | ISO/IEC/IEEE 29148:2018                                           |
+| Project            | `bacteria-timeseries-laravel-example`                             |
+| Module             | Organizations, Labs, Samples, Observations, Lab Map, Demo Seeding |
+| Database increment | PostgreSQL first; ClickHouse deferred                             |
+| Prepared by        | Engineering (design interview output)                             |
+| Approved by        | Pending                                                           |
+
+### Document control
+
+| Version | Date       | Author      | Change                                                                                                                                                      |
+| ------- | ---------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-11-12 | Engineering | Initial SRS derived from the design interview                                                                                                               |
+| 1.1     | 2026-11-13 | Engineering | Stress seeder tripled: small, medium, and large labs per organization (240, 640, and 1,280 sample places); updated volume and map performance targets       |
+| 1.2     | 2026-11-13 | Engineering | Selected organization moved to the server-side session; Dashboard removed; added Labs and Manage Organizations pages; organization id removed from lab URLs |
+
+### Table of contents
+
+1. [Introduction](#1-introduction)
+2. [Stakeholders and user classes](#2-stakeholders-and-user-classes)
+3. [System context and operational environment](#3-system-context-and-operational-environment)
+4. [Functional requirements](#4-functional-requirements)
+5. [Non-functional requirements](#5-non-functional-requirements)
+6. [External interface requirements](#6-external-interface-requirements)
+7. [Data requirements](#7-data-requirements)
+8. [Constraints](#8-constraints)
+9. [Assumptions and dependencies](#9-assumptions-and-dependencies)
+10. [Verification and acceptance](#10-verification-and-acceptance)
+11. [Traceability](#11-traceability)
+12. [Appendices](#12-appendices)
+
+---
+
+## 1. Introduction
+
+### 1.1 Purpose
+
+This document specifies the requirements for the Observations module of the Bacteria Timeseries application. It defines the organizations, labs, physical lab hierarchy, samples, observation semantics, weekly state model, lab map, demo seeding, access control, data model, and verification criteria needed to build the module.
+
+The document is written to be reviewable and actionable before implementation. It is the authoritative source for scope decisions in this increment.
+
+### 1.2 Scope
+
+#### 1.2.1 In scope
+
+- Organization management with name, address, and IANA timezone.
+- A server-side selected-organization context with a navigation switcher.
+- Organization membership with owner, admin, and member roles.
+- A Manage Organizations page for creating, updating, and deleting organizations.
+- A Labs page that lists the labs of the selected organization.
+- Lab management with a fixed physical hierarchy of rows, shelves, and levels.
+- Sample records placed at a lab level, with generated codes and fixed locations.
+- Observation storage for raw readings, including level-based and count-based bacteria results.
+- ISO week computation in the organization timezone and carry-forward weekly state.
+- A full lab map with a week selector, per-sample summaries, and lazy-loaded bacteria details.
+- A deterministic, high-volume demo seeder for observations.
+- PostgreSQL schema, migrations, models, factories, policies, form requests, pages, and tests.
+- Existing bacteria catalog extension with an observation type.
+
+#### 1.2.2 Out of scope
+
+- Manual observation creation, editing, or deletion UI.
+- Sample create, edit, or delete UI.
+- Membership invitation or membership management UI.
+- ClickHouse ingestion, mirroring, or analytical queries.
+- Dashboards or reports beyond the lab map. The application has no dashboard page in this increment.
+- Batch readings covering multiple samples at once.
+- Mobile-native applications.
+- Public or guest access to organization or lab data.
+- Soft deletes.
+- Historical timezone rewriting.
+- Editing a lab's structure counts after creation.
+- Non-uniform lab layouts created through the UI (the schema supports them, but the form does not).
+
+### 1.3 Intended audience and reading suggestions
+
+| Audience                      | Recommended sections     |
+| ----------------------------- | ------------------------ |
+| Product owner / domain expert | 1, 2, 4, 10, 12          |
+| Backend engineer              | 3, 4, 5, 7, 8, 9, 10, 11 |
+| Frontend engineer             | 4.7, 4.9, 5.5, 6.1, 10   |
+| QA engineer                   | 4, 5, 10, 11             |
+| Reviewer / approver           | 1, 2, 10, 11, 12         |
+
+### 1.4 Definitions, acronyms, and abbreviations
+
+| Term                  | Definition                                                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Organization          | Top-level tenant. Owns labs and members. Has a name, address, and IANA timezone.                                                 |
+| Selected organization | The organization the signed-in user chose in the session. It scopes the Labs area and is never part of a lab URL.                |
+| Lab                   | A physical laboratory belonging to one organization. Has a fixed hierarchy of rows, shelves, and levels.                         |
+| Row                   | A numbered aisle or row of shelving units inside a lab.                                                                          |
+| Shelf                 | A numbered shelving unit inside a row.                                                                                           |
+| Level                 | A numbered plank or tier inside a shelf. Samples sit on a level.                                                                 |
+| Sample place          | One lab level. A lab has `row_count × shelves_per_row × levels_per_shelf` sample places, whatever the number of samples on each. |
+| Sample                | A physical sample placed at one level. Fixed to that level for its lifetime.                                                     |
+| Observation           | A reading event for one sample at one timestamp.                                                                                 |
+| Bacteria observation  | A result for one bacterium within an observation.                                                                                |
+| Growth level          | Qualitative result for a level bacterium: `high`, `medium`, `low`, or `none`.                                                    |
+| Count                 | Non-negative integer result for a count bacterium.                                                                               |
+| Cycle                 | A maximal run of positive observations for one sample+bacterium, terminated by `none` or `0`.                                    |
+| NONE                  | Terminal growth level meaning the bacterium is absent and the cycle has ended.                                                   |
+| Zero                  | Terminal count value meaning the bacterium is absent and the cycle has ended.                                                    |
+| ISO week              | Monday–Sunday week defined by ISO 8601; week 1 contains January 4.                                                               |
+| YEARWEEK              | MySQL-style week function. This document uses ISO-8601 semantics, equivalent to `YEARWEEK(date, 3)`, not MySQL's default mode 0. |
+| Weekly state          | The latest observation for a sample+bacterium before the end of a selected ISO week, carried forward from earlier weeks.         |
+| Lab map               | The read-only visualization of rows, shelves, levels, and samples with current bacteria summaries.                               |
+| Week selector         | The control that chooses the ISO week whose end-of-week state the map displays.                                                  |
+| Owner                 | Organization role with full organization and lab control.                                                                        |
+| Admin                 | Organization role that manages labs but not the organization itself.                                                             |
+| Member                | Organization role with read-only access.                                                                                         |
+| Tenant                | An organization and its data, isolated from other organizations.                                                                 |
+| CFU                   | Colony-forming unit. The count is stored as a raw integer; no unit is stored in this increment.                                  |
+| SRS                   | Software Requirements Specification.                                                                                             |
+| NFR                   | Non-functional requirement.                                                                                                      |
+| FK                    | Foreign key.                                                                                                                     |
+| PK                    | Primary key.                                                                                                                     |
+
+### 1.5 References
+
+| Reference                              | Description                                                                         |
+| -------------------------------------- | ----------------------------------------------------------------------------------- |
+| ISO/IEC/IEEE 29148:2018                | Systems and software engineering — Life cycle processes — Requirements engineering. |
+| ISO 8601                               | Date and time representation; ISO week rules.                                       |
+| IANA Time Zone Database                | Valid timezone identifiers.                                                         |
+| Laravel 13 documentation               | Framework conventions, Eloquent, migrations, policies, validation.                  |
+| Inertia.js 3 documentation             | Server-driven page props and forms.                                                 |
+| Vue 3 documentation                    | Frontend components and reactivity.                                                 |
+| PostgreSQL 16 documentation            | Types, constraints, indexes, `DISTINCT ON`.                                         |
+| Repository `README.md`                 | Existing application setup and ClickHouse context.                                  |
+| Repository `DESIGN.md`                 | Existing visual direction and UI conventions.                                       |
+| Repository `AGENTS.md` / lerd guidance | Local development environment and conventions.                                      |
+
+### 1.6 Document overview
+
+This SRS follows the ISO/IEC/IEEE 29148 structure: introduction, stakeholders, system context, functional requirements, non-functional requirements, external interfaces, data requirements, constraints, assumptions, verification, traceability, and appendices.
+
+Each functional requirement has a unique identifier, a statement using **shall**, a priority, a verification method, and a source decision reference. Requirements are grouped by feature area. The source decisions are listed in Appendix A. The traceability summary is in Section 11.
+
+Requirement quality rules applied:
+
+- Each requirement is necessary for the agreed scope.
+- Each requirement is stated with **shall** (mandatory), **should** (recommended), or **may** (optional).
+- Each requirement is verifiable by test, demonstration, inspection, or analysis.
+- Requirements avoid implementation details except where the decision itself is architectural (for example, PostgreSQL and ISO week columns).
+- Compound form requirements are kept together only when they describe one user action with one validation surface.
+
+---
+
+## 2. Stakeholders and user classes
+
+### 2.1 Stakeholders
+
+| Stakeholder          | Interest                                                                                 |
+| -------------------- | ---------------------------------------------------------------------------------------- |
+| Product owner        | Wants a data-heavy observations module seeded and viewable before manual entry is built. |
+| Lab domain expert    | Wants the physical hierarchy and bacteria cycles to match real lab semantics.            |
+| Backend engineer     | Needs a clear schema, observation contract, and seeding algorithm.                       |
+| Frontend engineer    | Needs exact page behavior, map cell rules, and payload expectations.                     |
+| QA engineer          | Needs verifiable acceptance criteria and a test plan.                                    |
+| Operator / developer | Runs migrations and the stress seeder locally.                                           |
+| Future analyst       | Will consume the observation data, eventually through ClickHouse.                        |
+
+### 2.2 User classes
+
+| User class    | Description                                                    | Authentication |
+| ------------- | -------------------------------------------------------------- | -------------- |
+| Guest         | Unauthenticated visitor.                                       | No             |
+| Verified user | Authenticated user with a verified email address.              | Yes            |
+| Owner         | Member of an organization with the owner role.                 | Yes            |
+| Admin         | Member of an organization with the admin role.                 | Yes            |
+| Member        | Member of an organization with the member role.                | Yes            |
+| Non-member    | Authenticated user with no membership in a given organization. | Yes            |
+| Seeder        | Console process that creates demo data.                        | Console        |
+
+### 2.3 User class permissions
+
+| Action                       | Owner                      | Admin | Member | Non-member | Guest |
+| ---------------------------- | -------------------------- | ----- | ------ | ---------- | ----- |
+| View organization            | Yes                        | Yes   | Yes    | No         | No    |
+| View Manage Organizations    | Yes                        | Yes   | Yes    | Yes        | No    |
+| Switch selected organization | Yes                        | Yes   | Yes    | No         | No    |
+| Update organization          | Yes                        | No    | No     | No         | No    |
+| Delete organization          | Yes                        | No    | No     | No         | No    |
+| Manage members               | Yes (no UI this increment) | No    | No     | No         | No    |
+| View labs                    | Yes                        | Yes   | Yes    | No         | No    |
+| Create lab                   | Yes                        | Yes   | No     | No         | No    |
+| Update lab                   | Yes                        | Yes   | No     | No         | No    |
+| Delete lab                   | Yes                        | Yes   | No     | No         | No    |
+| View lab map                 | Yes                        | Yes   | Yes    | No         | No    |
+| View sample details          | Yes                        | Yes   | Yes    | No         | No    |
+| Create organization          | Yes                        | Yes   | Yes    | Yes        | No    |
+
+---
+
+## 3. System context and operational environment
+
+### 3.1 System context
+
+The Observations module is part of the existing Laravel 13 application. It uses:
+
+- PostgreSQL as the application database and the only database for this increment.
+- Inertia.js 3 with Vue 3 for pages.
+- Laravel Fortify for authentication.
+- Laravel Wayfinder for typed frontend routes.
+- shadcn-vue components for UI.
+- Pest for automated tests.
+- PHPStan/Larastan, Pint, and the existing TypeScript checks for quality gates.
+- ClickHouse as a configured but unused secondary connection in this increment.
+
+The module does not introduce a separate service, queue worker, or external API. The demo seeder runs as a console process against PostgreSQL.
+
+### 3.2 Operational environment
+
+| Environment       | Description                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Local development | lerd with PostgreSQL, Redis, Mailpit, and ClickHouse services. The module only needs PostgreSQL and Redis for the existing app. |
+| Testing           | PostgreSQL test database. Pest with `RefreshDatabase`.                                                                          |
+| Production        | Not specified in this increment. The demo seeder is not intended for production.                                                |
+| Browser           | Modern evergreen desktop and mobile browsers. Minimum supported width is 320 px.                                                |
+
+### 3.3 Existing system facts
+
+- The application already has `users`, `sessions`, `cache`, `jobs`, `passkeys`, and `bacteria` tables.
+- The `bacteria` catalog currently contains 10 foodborne organisms with name, short name, description, color, and icon.
+- The existing bacteria pages are read-only and remain unchanged except for the new `observation_type` attribute.
+- The existing `DatabaseSeeder` creates one user and calls `BacteriaSeeder`.
+- The existing application uses Postgres by default (`DB_CONNECTION=pgsql`).
+- The existing test environment uses Postgres (`DB_CONNECTION=pgsql` in `.env.testing`).
+- The existing frontend uses Inertia pages, Wayfinder route helpers, and shadcn-vue components.
+- The existing sidebar has Labs, Organizations, and Bacteria navigation items and an organization switcher. There is no dashboard page.
+
+### 3.4 Data volume profile
+
+The stress seeder is expected to produce:
+
+| Metric                          | Estimate                                                           |
+| ------------------------------- | ------------------------------------------------------------------ |
+| Organizations                   | 3                                                                  |
+| Labs                            | 9 (3 per organization: small, medium, large)                       |
+| Sample places (levels) per lab  | 240 (5×6×8), 640 (8×8×10), or 1,280 (8×10×16)                      |
+| Samples per lab                 | 720, 1,920, or 3,840 (3 per level)                                 |
+| Total samples                   | 19,440 (6,480 per organization)                                    |
+| Observation window              | 26 weeks, labs 20–26 weeks old, 0–4 week delay                     |
+| Readings per sample per week    | 2–4 while bacteria are present                                     |
+| Level bacteria per sample       | 0–6                                                                |
+| Count bacteria per sample       | 0–3                                                                |
+| Estimated observations          | ~800,000 (0.6–1.0 million)                                         |
+| Estimated bacteria observations | ~1.9 million (1.5–2.5 million)                                     |
+| Estimated PostgreSQL storage    | ~400 MB measured; plan for 400 MB–1.2 GB including indexes         |
+| Lab map initial payload         | 720 summaries / 140 KB (small) to 3,840 summaries / 746 KB (large) |
+
+These are planning estimates, not hard limits. The schema and queries must remain usable at this scale.
+
+---
+
+## 4. Functional requirements
+
+### 4.1 Organization management
+
+| ID         | Requirement                                                                                                                                                        | Priority | Verification        | Source           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------------- | ---------------- |
+| FR-ORG-001 | The system shall allow an authenticated, verified user to create an organization.                                                                                  | Must     | Test                | D8               |
+| FR-ORG-002 | The system shall require an organization name of 1–255 characters that is unique across all organizations.                                                         | Must     | Test                | D8               |
+| FR-ORG-003 | The system shall require an organization address of 1–1000 characters.                                                                                             | Must     | Test                | D9               |
+| FR-ORG-004 | The system shall require an organization timezone that is a valid IANA timezone identifier.                                                                        | Must     | Test                | D5               |
+| FR-ORG-005 | The system shall assign the creating user the owner role for the new organization in the same database transaction.                                                | Must     | Test                | D8, D17          |
+| FR-ORG-006 | The system shall list only organizations in which the authenticated user has a membership.                                                                         | Must     | Test                | D8               |
+| FR-ORG-007 | The Manage Organizations page shall display each organization's name, address, timezone, the current user's role, lab count, and the actions the user may perform. | Must     | Test                | D16              |
+| FR-ORG-008 | The system shall allow an owner to update an organization's name, address, and timezone.                                                                           | Must     | Test                | D17, D20         |
+| FR-ORG-009 | The system shall prevent an admin or member from updating an organization.                                                                                         | Must     | Test                | D20              |
+| FR-ORG-010 | The system shall allow an owner to delete an organization after explicit confirmation.                                                                             | Must     | Test                | D17, D20         |
+| FR-ORG-011 | The system shall prevent an admin or member from deleting an organization.                                                                                         | Must     | Test                | D20              |
+| FR-ORG-012 | The system shall cascade deletion of an organization to its labs, rows, shelves, levels, samples, observations, and bacteria observations.                         | Must     | Test                | D16, FR-DATA-001 |
+| FR-ORG-013 | The system shall display a confirmation dialog that names the organization and its lab count before deletion.                                                      | Must     | Test, Demonstration | D16              |
+| FR-ORG-014 | The system shall store the selected organization in the server-side session, not in the URL.                                                                       | Must     | Test, Inspection    | D33              |
+| FR-ORG-015 | The system shall provide an organization switcher in the main navigation listing only organizations the user belongs to.                                           | Must     | Test, Demonstration | D33              |
+| FR-ORG-016 | The system shall keep the selected organization across requests until the user switches it or it becomes unavailable.                                              | Must     | Test                | D33              |
+| FR-ORG-017 | The system shall fall back to the user's first organization, ordered by name, when the session selection is missing or invalid, and store that fallback.           | Must     | Test                | D33              |
+| FR-ORG-018 | The system shall clear the stored selection when the selected organization is deleted.                                                                             | Must     | Test                | D33              |
+| FR-ORG-019 | The system shall select an organization automatically when the user creates it.                                                                                    | Should   | Test                | D33              |
+| FR-ORG-020 | The system shall redirect to the Labs page after the user switches the selected organization.                                                                      | Must     | Test                | D36              |
+
+**Notes**
+
+- The organization address is a single text field in this increment. Structured address fields are out of scope.
+- The organization timezone applies to all its labs. Labs do not have independent timezones.
+- Organization names are globally unique to keep routing and display unambiguous.
+- Organizations are created, updated, and deleted from the Manage Organizations page, not from a detail page.
+- Any authenticated, verified user may create an organization; only its owner may update or delete it.
+- The organization switcher is in the sidebar header. Switching posts to a dedicated endpoint and redirects to the Labs page, so a lab from the previous organization is never left on screen.
+- The selected organization is per user session. Two tabs share the selection; switching in one tab changes the other tab on its next request.
+- The organization list on the Manage Organizations page is a personal membership list, not a global directory.
+
+### 4.2 Membership and authorization
+
+| ID          | Requirement                                                                                                                              | Priority | Verification | Source       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------ | ------------ |
+| FR-AUTH-001 | The system shall support the roles `owner`, `admin`, and `member` on an organization membership.                                         | Must     | Test         | D17          |
+| FR-AUTH-002 | The system shall allow an owner to manage labs and to update or delete the organization.                                                 | Must     | Test         | D20          |
+| FR-AUTH-003 | The system shall allow an admin to manage labs and to view the organization.                                                             | Must     | Test         | D20          |
+| FR-AUTH-004 | The system shall allow a member to view the organization and its labs only.                                                              | Must     | Test         | D20          |
+| FR-AUTH-005 | The system shall deny organization and lab access to authenticated users who are not members of the organization.                        | Must     | Test         | D8, D20      |
+| FR-AUTH-006 | The system shall redirect unauthenticated users to the login page when they request an organization or lab route.                        | Must     | Test         | Existing app |
+| FR-AUTH-007 | The system shall require a verified email address for organization and lab routes.                                                       | Must     | Test         | Existing app |
+| FR-AUTH-008 | The system shall not provide membership invitation or membership management UI in this increment.                                        | Must     | Inspection   | D8           |
+| FR-AUTH-009 | The system shall allow the demo seeder to assign memberships and roles.                                                                  | Must     | Test         | D8           |
+| FR-AUTH-010 | The system shall hide create, edit, and delete controls from users whose role does not permit the action.                                | Must     | Test         | D20          |
+| FR-AUTH-011 | The system shall allow any authenticated, verified user to create an organization and become its owner.                                  | Must     | Test         | D8, D17      |
+| FR-AUTH-012 | The system shall enforce all authorization server-side through policies, independently of the UI.                                        | Must     | Test         | D20          |
+| FR-AUTH-013 | The system shall allow a user to select only an organization in which they have a membership.                                            | Must     | Test         | D33          |
+| FR-AUTH-014 | The system shall return 403 for a lab route when the user is not a member of the lab's organization.                                     | Must     | Test         | D8, D20      |
+| FR-AUTH-015 | The system shall return 404 for a lab route when the user is a member of the lab's organization but it is not the selected organization. | Must     | Test         | D33          |
+
+**Notes**
+
+- A non-member receives HTTP 403 for organization and lab routes. The system must not leak whether the organization exists.
+- A member who requests a lab from an organization other than the selected one receives 404, so the selected organization behaves as the working context.
+- The UI hides forbidden actions, but the policy remains the source of truth.
+- There is no owner-transfer or member-removal UI in this increment.
+- The seeder assigns the existing user and demo users to organizations with a mix of roles.
+
+### 4.3 Lab management and hierarchy
+
+| ID         | Requirement                                                                                                                                     | Priority | Verification     | Source          |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------- | --------------- |
+| FR-LAB-001 | The system shall allow an owner or admin to create a lab under the selected organization.                                                       | Must     | Test             | D20             |
+| FR-LAB-002 | The system shall require a lab name of 1–255 characters that is unique within its organization.                                                 | Must     | Test             | D10             |
+| FR-LAB-003 | The system shall accept an optional lab code of 1–50 characters that is unique within its organization when present.                            | Must     | Test             | D10             |
+| FR-LAB-004 | The system shall accept optional lab notes of up to 2000 characters.                                                                            | Must     | Test             | D10             |
+| FR-LAB-005 | The system shall require integer `row_count`, `shelves_per_row`, and `levels_per_shelf` values from 1 to 20 on lab creation.                    | Must     | Test             | D15, constraint |
+| FR-LAB-006 | The system shall generate lab rows numbered 1 through `row_count` in the same transaction as the lab.                                           | Must     | Test             | D1, D2          |
+| FR-LAB-007 | The system shall generate lab shelves numbered 1 through `shelves_per_row` for each generated row.                                              | Must     | Test             | D1, D2          |
+| FR-LAB-008 | The system shall generate lab levels numbered 1 through `levels_per_shelf` for each generated shelf.                                            | Must     | Test             | D1, D2          |
+| FR-LAB-009 | The system shall prevent changes to `row_count`, `shelves_per_row`, and `levels_per_shelf` after lab creation.                                  | Must     | Test             | D15             |
+| FR-LAB-010 | The system shall display a lab's structure summary (rows × shelves × levels), creation date, and sample count on the Labs page and the lab map. | Must     | Test             | D16             |
+| FR-LAB-011 | The system shall allow an owner or admin to update a lab's name, code, and notes.                                                               | Must     | Test             | D20             |
+| FR-LAB-012 | The system shall prevent a member from creating, updating, or deleting a lab.                                                                   | Must     | Test             | D20             |
+| FR-LAB-013 | The system shall allow an owner or admin to delete a lab after explicit confirmation.                                                           | Must     | Test             | D20             |
+| FR-LAB-014 | The system shall cascade deletion of a lab to its rows, shelves, levels, samples, observations, and bacteria observations.                      | Must     | Test             | FR-DATA-001     |
+| FR-LAB-015 | The system shall list a lab's rows, shelves, levels, and samples on the lab map.                                                                | Must     | Test             | D21             |
+| FR-LAB-016 | The system shall use the lab creation date to determine the first week offered by the week selector.                                            | Must     | Test             | D29             |
+| FR-LAB-017 | The system shall display a preview of the total level count on the lab creation form.                                                           | Should   | Test             | D15             |
+| FR-LAB-018 | The system shall display the fixed structure counts as read-only on the lab edit form.                                                          | Must     | Test             | D15             |
+| FR-LAB-019 | The Labs page shall list only the labs of the selected organization.                                                                            | Must     | Test             | D33             |
+| FR-LAB-020 | The system shall address lab pages as `/labs/{lab}` and shall not include an organization identifier in the URL.                                | Must     | Test, Inspection | D33             |
+
+**Notes**
+
+- The 1–20 limit per dimension protects the UI and database from accidental massive hierarchies. The stress seeder bypasses the form and uses three sizes per organization: 5×6×8, 8×8×10, and 8×10×16.
+- The hierarchy tables support non-uniform layouts, but the form only creates uniform grids.
+- Lab structure counts are creation parameters and are immutable. They are stored on the lab for display and audit.
+- The lab detail page is the lab map, not a separate structure page. Labs are reached from the Labs page and addressed as `/labs/{lab}`.
+- The Labs page, lab map, edit form, sample details endpoint, and delete action all operate on the selected organization; the organization id is not part of lab URLs.
+- Lab creation reads the organization from the selected-organization context, not from the URL.
+- Lab creation and hierarchy generation must be atomic. A failure must leave no partial lab.
+
+### 4.4 Samples
+
+| ID         | Requirement                                                                              | Priority | Verification | Source      |
+| ---------- | ---------------------------------------------------------------------------------------- | -------- | ------------ | ----------- |
+| FR-SMP-001 | The system shall associate each sample with exactly one lab and one lab level.           | Must     | Test         | D3          |
+| FR-SMP-002 | The system shall assign each sample a code that is unique within its lab.                | Must     | Test         | D3          |
+| FR-SMP-003 | The system shall format sample codes as `R{row}-S{shelf}-L{level}-{sequence:02}`.        | Must     | Unit test    | D3          |
+| FR-SMP-004 | The system shall assign sample sequence numbers starting at `01` within each level.      | Must     | Unit test    | D3          |
+| FR-SMP-005 | The system shall keep a sample fixed to its level for its lifetime.                      | Must     | Test         | D3          |
+| FR-SMP-006 | The system shall allow multiple samples per level.                                       | Must     | Test         | D3          |
+| FR-SMP-007 | The system shall not provide sample create, edit, or delete UI in this increment.        | Must     | Inspection   | D16         |
+| FR-SMP-008 | The system shall allow the demo seeder and future ingestion processes to create samples. | Must     | Test         | D3          |
+| FR-SMP-009 | The system shall store a denormalized `lab_id` on each sample.                           | Must     | Inspection   | Performance |
+
+**Notes**
+
+- A sample is a physical item. Replacing a sample means creating a new sample at the same level, preserving the old sample's observation history.
+- Sample codes are unique per lab, not globally. The lab ID disambiguates.
+- No sample type, source, or collected date fields exist in this increment.
+- The sample sequence is per level. A level with three samples has codes ending `-01`, `-02`, and `-03`.
+
+### 4.5 Observations
+
+| ID         | Requirement                                                                                                                                                         | Priority | Verification        | Source         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------- | -------------- |
+| FR-OBS-001 | The system shall store an observation as a reading event for one sample at one `observed_at` timestamp.                                                             | Must     | Test                | D4             |
+| FR-OBS-002 | The system shall store `observed_at` as a PostgreSQL `timestamptz` in UTC.                                                                                          | Must     | Inspection          | D5             |
+| FR-OBS-003 | The system shall store `iso_year` and `iso_week` on each observation.                                                                                               | Must     | Test                | D5             |
+| FR-OBS-004 | The system shall compute `iso_year` and `iso_week` from `observed_at` in the organization's timezone at write time.                                                 | Must     | Unit test           | D5             |
+| FR-OBS-005 | The system shall allow multiple observations per sample per ISO week.                                                                                               | Must     | Test                | D4             |
+| FR-OBS-006 | The system shall store one or more bacteria observations per observation.                                                                                           | Must     | Test                | D4             |
+| FR-OBS-007 | The system shall enforce at most one bacteria observation per observation and bacterium.                                                                            | Must     | Test                | Data integrity |
+| FR-OBS-008 | The system shall require `growth_level` for bacteria with `observation_type = level`.                                                                               | Must     | Test                | D6, D18        |
+| FR-OBS-009 | The system shall allow `growth_level` values `high`, `medium`, `low`, and `none` for level bacteria.                                                                | Must     | Unit test           | D6             |
+| FR-OBS-010 | The system shall require a non-negative integer `count` for bacteria with `observation_type = count`.                                                               | Must     | Test                | D7, D19        |
+| FR-OBS-011 | The system shall require exactly one of `growth_level` or `count` to be set on a bacteria observation.                                                              | Must     | Test, DB inspection | Data integrity |
+| FR-OBS-012 | The system shall record a level bacterium's `none` value only when a previously positive bacterium becomes absent.                                                  | Must     | Test                | D12            |
+| FR-OBS-013 | The system shall record a count bacterium's `0` value only when a previously positive bacterium becomes absent.                                                     | Must     | Test                | D19            |
+| FR-OBS-014 | The system shall not store bacteria observation rows for a bacterium while it remains absent.                                                                       | Must     | Test                | D12, D19       |
+| FR-OBS-015 | The system shall allow a new positive observation after a `none` or `0` observation, starting a new cycle.                                                          | Must     | Test                | D12, D19       |
+| FR-OBS-016 | The system shall record, in a reading, every bacterium that is present at that reading and every bacterium that transitions from present to absent at that reading. | Must     | Test                | D4             |
+| FR-OBS-017 | The system shall not store an observation that has no bacteria observations.                                                                                        | Must     | Test                | D4             |
+| FR-OBS-018 | The system shall derive cycles from the observation stream and shall not store a cycle entity or cycle number.                                                      | Must     | Inspection          | D14            |
+| FR-OBS-019 | The system shall not provide manual observation creation, editing, or deletion UI in this increment.                                                                | Must     | Inspection          | D16            |
+| FR-OBS-020 | The system shall enforce the observation data rules for future ingestion through application validation.                                                            | Must     | Inspection          | D11            |
+| FR-OBS-021 | The system shall enforce at most one observation per sample and `observed_at` timestamp.                                                                            | Must     | Test                | Data integrity |
+| FR-OBS-022 | The system shall store `observation_type` on each bacterium as `level` or `count`.                                                                                  | Must     | Test                | D18            |
+| FR-OBS-023 | The system shall classify Salmonella, E. coli, Listeria, Campylobacter, S. aureus, and B. cereus as level bacteria.                                                 | Must     | Test                | D18            |
+| FR-OBS-024 | The system shall classify C. perfringens, C. botulinum, Vibrio, and Yersinia as count bacteria.                                                                     | Must     | Test                | D18            |
+| FR-OBS-025 | The system shall reject an observation whose `observed_at` is in the future.                                                                                        | Should   | Test                | Data quality   |
+
+**Notes**
+
+- A reading includes every currently present bacterium, even if its level or count is unchanged. This creates a dense timeline for present bacteria and a sparse timeline for absent bacteria.
+- A level bacterium's `none` is a recorded event that closes a cycle. It is not a blank. After `none`, no rows exist for that bacterium until it reappears.
+- A count bacterium's `0` is the terminal event that closes a cycle. After `0`, no rows exist until it reappears.
+- A bacterium that has never been positive has no rows. This is equivalent to "not tested / not present" for the map.
+- The observation parent is not stored if it would have zero bacteria observations.
+- The application enforces the relationship between the bacterium's `observation_type` and the result field. The database enforces exactly one of the two result fields.
+- `observed_at` is stored in UTC. The organization timezone is used only to derive the ISO week and to render labels.
+
+### 4.6 Weekly state and cycles
+
+| ID        | Requirement                                                                                                                                                                    | Priority | Verification    | Source   |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | --------------- | -------- |
+| FR-WK-001 | The system shall define the state of a sample+bacterium for an ISO week as the latest observation with `observed_at` before the end of that week in the organization timezone. | Must     | Unit test, Test | D13      |
+| FR-WK-002 | The system shall carry forward the latest prior observation into weeks with no observation.                                                                                    | Must     | Unit test, Test | D13      |
+| FR-WK-003 | The system shall treat a sample+bacterium with no observation ever as having no state.                                                                                         | Must     | Unit test, Test | D13      |
+| FR-WK-004 | The system shall treat a `none` or `0` latest observation as absent.                                                                                                           | Must     | Unit test, Test | D12, D19 |
+| FR-WK-005 | The system shall use the end of the selected ISO week (Sunday 23:59:59.999999 in the organization timezone) as the state cutoff.                                               | Must     | Unit test       | D13      |
+| FR-WK-006 | The system shall use the latest observation so far for the current, incomplete ISO week.                                                                                       | Must     | Test            | D30      |
+| FR-WK-007 | The system shall define ISO weeks as Monday–Sunday, with week 1 containing January 4.                                                                                          | Must     | Unit test       | D5       |
+| FR-WK-008 | The system shall not rewrite historical `iso_year` and `iso_week` values when an organization's timezone changes.                                                              | Must     | Inspection      | D5       |
+| FR-WK-009 | The system shall derive a cycle as a maximal run of positive observations terminated by `none` or `0`.                                                                         | Must     | Unit test       | D14      |
+| FR-WK-010 | The system shall allow a new cycle after a `none` or `0` observation.                                                                                                          | Must     | Unit test, Test | D12, D19 |
+
+**Notes**
+
+- The weekly state is a "last observation carried forward" model. A bacterium does not become unknown just because it was not retested.
+- The current week is partial. Its state is the latest observation so far, not a future end-of-week value.
+- If an organization's timezone is corrected, historical week columns remain as originally computed. Recomputing history is out of scope.
+- Cycles are a derived interpretation of the event stream. No cycle table or cycle number exists.
+
+### 4.7 Lab map and week selector
+
+| ID         | Requirement                                                                                                                                                                   | Priority | Verification               | Source   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------- | -------- |
+| FR-MAP-001 | The system shall display a full lab map for a lab, organized as rows → shelves → levels → samples.                                                                            | Must     | Test, Demonstration        | D21, D28 |
+| FR-MAP-002 | The system shall display every level and every sample in the lab without pagination or collapsing.                                                                            | Must     | Demonstration              | D21, D28 |
+| FR-MAP-003 | The system shall offer a week selector containing every ISO week from the lab creation week through the current ISO week in the organization timezone.                        | Must     | Test                       | D29, D30 |
+| FR-MAP-004 | The system shall default the week selector to the current ISO week.                                                                                                           | Must     | Test                       | D30      |
+| FR-MAP-005 | The system shall include weeks with no observations in the selector.                                                                                                          | Must     | Test                       | D29      |
+| FR-MAP-006 | The system shall accept the selected week as a `YYYY-Www` query parameter.                                                                                                    | Must     | Test                       | D24      |
+| FR-MAP-007 | The system shall fall back to the current week when the query parameter is missing or invalid.                                                                                | Must     | Test                       | D24      |
+| FR-MAP-008 | The system shall display only bacteria that are present in the selected week's state.                                                                                         | Must     | Test                       | D21      |
+| FR-MAP-009 | The system shall display a single present bacterium's icon or color and its level or count.                                                                                   | Must     | Test                       | D25      |
+| FR-MAP-010 | The system shall display the highest growth level among multiple present level bacteria.                                                                                      | Must     | Test                       | D25      |
+| FR-MAP-011 | The system shall display the highest growth level, when at least one level bacterium is present, and the total number of present bacteria when multiple bacteria are present. | Must     | Test                       | D25      |
+| FR-MAP-012 | The system shall display the highest count as a numeric badge for present count bacteria.                                                                                     | Must     | Test                       | D25      |
+| FR-MAP-013 | The system shall display both the highest level and a count badge for mixed level and count bacteria.                                                                         | Must     | Test                       | D25      |
+| FR-MAP-014 | The system shall order growth levels HIGH > MEDIUM > LOW for the highest-level calculation.                                                                                   | Must     | Unit test                  | D25      |
+| FR-MAP-015 | The system shall display an empty gray cell for a sample with no present bacteria.                                                                                            | Must     | Test, Demonstration        | D25      |
+| FR-MAP-016 | The system shall open a details drawer when a sample cell is activated.                                                                                                       | Must     | Test, Demonstration        | D21      |
+| FR-MAP-017 | The details drawer shall list every present bacterium for the selected week with its name, icon or color, and level or count.                                                 | Must     | Test, Demonstration        | D21      |
+| FR-MAP-018 | The system shall send only per-sample summaries in the initial lab map payload.                                                                                               | Must     | Test                       | D26      |
+| FR-MAP-019 | The system shall load sample bacteria details from a dedicated JSON endpoint on demand.                                                                                       | Must     | Test                       | D26      |
+| FR-MAP-020 | The details endpoint shall apply the same selected-week cutoff as the map.                                                                                                    | Must     | Test                       | D26      |
+| FR-MAP-021 | The details endpoint shall require membership in the lab's organization.                                                                                                      | Must     | Test                       | D20      |
+| FR-MAP-022 | The system shall display a legend for growth levels and count badges.                                                                                                         | Must     | Demonstration              | D25      |
+| FR-MAP-023 | The system shall display an empty state when the lab has no observations.                                                                                                     | Must     | Test, Demonstration        | D21      |
+| FR-MAP-024 | The system shall be responsive from 320 px to 1280 px and above.                                                                                                              | Must     | Demonstration              | NFR      |
+| FR-MAP-025 | The system shall not rely on color alone to convey growth level or presence.                                                                                                  | Must     | Inspection, Demonstration  | NFR      |
+| FR-MAP-026 | The system shall load the lab map within 2 seconds at p95 for 720 samples on the local environment.                                                                           | Must     | Analysis, Performance test | NFR      |
+| FR-MAP-027 | The system shall not provide observation create, edit, or delete controls in this increment.                                                                                  | Must     | Inspection                 | D16      |
+| FR-MAP-028 | The system shall load the lab map within 6 seconds at p95 for the largest seeded lab (1,280 levels, 3,840 samples) on the local environment.                                  | Must     | Analysis, Performance test | NFR      |
+
+**Notes**
+
+- The week selector starts at the ISO week containing the lab's `created_at` and ends at the current ISO week in the organization timezone. Both endpoints are inclusive.
+- The selected week is carried in the URL so the view is shareable and reloadable.
+- An invalid or out-of-range week falls back to the current week. The page does not error.
+- The map uses per-sample summaries in the initial payload. The drawer fetches the full list for one sample and the selected week.
+- The map's "highest level" applies only to level bacteria. Count bacteria are represented by a numeric badge.
+- A sample with one present bacterium shows that bacterium's icon/color and its value. A sample with multiple present bacteria shows the highest level and the total count, with the details in the drawer.
+- The map is read-only. There is no observation creation UI.
+- The sample details endpoint is `/labs/{lab}/samples/{sample}/bacteria?week=YYYY-Www`; it does not include the organization id.
+
+### 4.8 Seeding
+
+| ID          | Requirement                                                                                                                                                                                    | Priority | Verification               | Source |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------- | ------ |
+| FR-SEED-001 | The system shall provide a dedicated `DemoStressSeeder` class.                                                                                                                                 | Must     | Inspection                 | D22    |
+| FR-SEED-002 | The system shall run the stress seeder only through an explicit class invocation or command.                                                                                                   | Must     | Inspection                 | D22    |
+| FR-SEED-003 | The system shall not invoke the stress seeder from `DatabaseSeeder`.                                                                                                                           | Must     | Inspection                 | D22    |
+| FR-SEED-004 | The stress seeder shall truncate demo organizations, memberships, labs, rows, shelves, levels, samples, observations, and bacteria observations before seeding.                                | Must     | Test                       | D22    |
+| FR-SEED-005 | The stress seeder shall preserve the `users` table and the `bacteria` catalog.                                                                                                                 | Must     | Test                       | D22    |
+| FR-SEED-006 | The stress seeder shall seed the bacteria catalog if it is empty.                                                                                                                              | Must     | Test                       | D22    |
+| FR-SEED-007 | The stress seeder shall create three organizations in `America/Sao_Paulo`, `Europe/Lisbon`, and `America/New_York`.                                                                            | Must     | Test                       | D23    |
+| FR-SEED-008 | The stress seeder shall create three labs per organization.                                                                                                                                    | Must     | Test                       | D23    |
+| FR-SEED-009 | The stress seeder shall create three labs per organization with sizes 5×6×8, 8×8×10, and 8×10×16 (rows × shelves × levels), so every organization has a lab with at least 1,000 sample places. | Must     | Test                       | D23    |
+| FR-SEED-010 | The stress seeder shall create three samples per level.                                                                                                                                        | Must     | Test                       | D23    |
+| FR-SEED-011 | The stress seeder shall randomize each lab's `created_at` between 26 and 20 weeks before the current date.                                                                                     | Must     | Test                       | D31    |
+| FR-SEED-012 | The stress seeder shall delay the first readings by a random 0–4 weeks after lab creation.                                                                                                     | Must     | Test                       | D32    |
+| FR-SEED-013 | The stress seeder shall generate observations for a 26-week window ending on the last completed Sunday in each organization's timezone.                                                        | Must     | Test                       | D23    |
+| FR-SEED-014 | The stress seeder shall generate 2–4 readings per sample per week while the sample has present bacteria.                                                                                       | Must     | Test                       | D23    |
+| FR-SEED-015 | The stress seeder shall assign each sample 0–6 level bacteria and 0–3 count bacteria.                                                                                                          | Must     | Test                       | D23    |
+| FR-SEED-016 | The stress seeder shall generate level-bacteria cycles of 2–8 weeks separated by 1–6 week gaps.                                                                                                | Must     | Test                       | D23    |
+| FR-SEED-017 | The stress seeder shall generate growth levels with LOW 45%, MEDIUM 35%, and HIGH 20% probability.                                                                                             | Must     | Test                       | D23    |
+| FR-SEED-018 | The stress seeder shall generate counts log-uniformly between 10^1 and 10^6.                                                                                                                   | Must     | Test                       | D23    |
+| FR-SEED-019 | The stress seeder shall leave approximately 10% of samples with no positive bacteria.                                                                                                          | Must     | Test                       | D23    |
+| FR-SEED-020 | The stress seeder shall generate reappearances after `none` or `0` for some bacteria.                                                                                                          | Must     | Test                       | D23    |
+| FR-SEED-021 | The stress seeder shall use a fixed random seed for reproducible output.                                                                                                                       | Must     | Inspection                 | D22    |
+| FR-SEED-022 | The stress seeder shall use chunked bulk inserts for observations and bacteria observations.                                                                                                   | Must     | Inspection                 | NFR    |
+| FR-SEED-023 | The stress seeder shall report progress to the console.                                                                                                                                        | Should   | Demonstration              | D22    |
+| FR-SEED-024 | The stress seeder shall be idempotent by truncating and rebuilding demo data.                                                                                                                  | Must     | Test                       | D22    |
+| FR-SEED-025 | The stress seeder shall complete within 10 minutes and use no more than 512 MB of memory on the local environment.                                                                             | Must     | Analysis, Performance test | NFR    |
+
+**Notes**
+
+- The seeder is destructive to demo organizations and their data. It is documented as a local/demo tool and must not be run against production data.
+- Users and the bacteria catalog survive truncation. The seeder attaches existing users to the new organizations with a mix of owner, admin, and member roles.
+- The stress seeder may call the existing `BacteriaSeeder` when the catalog is empty.
+- The random seed is fixed so repeated runs produce the same dataset.
+- The seeder generates observations only where there is something to record. A reading with no present bacteria and no transitions is skipped.
+- The seeder computes `iso_year` and `iso_week` in each organization's timezone, then stores `observed_at` in UTC.
+- The seeder uses explicit bigint IDs for bulk-inserted observation rows and resets the PostgreSQL sequences after insertion.
+- Each lab is generated inside one database transaction so the thousand-row buffers do not pay a commit each. On the local environment the 3× dataset seeds in about 8 minutes 16 seconds with a peak of about 43 MB, within FR-SEED-025.
+
+### 4.9 Navigation and UI
+
+| ID        | Requirement                                                                                                                                 | Priority | Verification        | Source       |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------- | ------------ |
+| FR-UI-001 | The system shall provide Labs, Organizations, and Bacteria items in the main sidebar navigation.                                            | Must     | Demonstration       | D16, D34     |
+| FR-UI-002 | The system shall display breadcrumbs for Lab and Manage Organizations pages.                                                                | Should   | Demonstration       | D16          |
+| FR-UI-003 | The system shall display validation errors inline on all forms.                                                                             | Must     | Test                | Existing app |
+| FR-UI-004 | The system shall require explicit confirmation before deleting an organization or lab.                                                      | Must     | Test                | D16          |
+| FR-UI-005 | The system shall display an empty state when the user has no organizations or a lab has no samples or observations.                         | Should   | Demonstration       | D16          |
+| FR-UI-006 | The system shall hide actions the current role cannot perform.                                                                              | Must     | Test                | D20          |
+| FR-UI-007 | The system shall follow the existing Vue, Inertia, and shadcn-vue visual conventions.                                                       | Should   | Inspection          | Existing app |
+| FR-UI-008 | The system shall not use emojis in the UI.                                                                                                  | Should   | Inspection          | DESIGN.md    |
+| FR-UI-009 | The organization form shall provide an IANA timezone select.                                                                                | Must     | Demonstration       | D5           |
+| FR-UI-010 | The lab creation form shall display the computed total level count before submission.                                                       | Should   | Demonstration       | D15          |
+| FR-UI-011 | The lab edit form shall display the fixed structure counts as read-only.                                                                    | Must     | Test                | D15          |
+| FR-UI-012 | The system shall not render a Dashboard page or a Dashboard navigation item.                                                                | Must     | Test, Inspection    | D34          |
+| FR-UI-013 | The system shall place the organization switcher at the top of the sidebar in menu mode and hide it when the sidebar is collapsed to icons. | Must     | Demonstration       | D33          |
+| FR-UI-014 | The Manage Organizations page shall offer create, edit, and delete actions allowed by the user's role.                                      | Must     | Test, Demonstration | D33          |
+
+**Notes**
+
+- The UI uses the existing app shell, sidebar, breadcrumbs, and shadcn-vue primitives.
+- The organization switcher sits in the sidebar header and is hidden when the sidebar is collapsed to icons; the same selection is used by every page.
+- The Dashboard page and its navigation item are removed. Sign-in and email verification redirect to the Labs page.
+- The map uses a level color scale plus text labels. Color is never the only indicator.
+- The details drawer uses the existing sheet/dialog pattern.
+- Delete confirmations name the entity and its dependent counts.
+
+### 4.10 Data integrity and retention
+
+| ID          | Requirement                                                                                                                                                                                                                                          | Priority | Verification     | Source         |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------- | -------------- |
+| FR-DATA-001 | The system shall define foreign keys with `ON DELETE CASCADE` for organization → lab → row → shelf → level → sample → observation → bacteria observation.                                                                                            | Must     | Inspection, Test | D16            |
+| FR-DATA-002 | The system shall enforce unique constraints on organization name, lab name per organization, lab code per organization, row number per lab, shelf number per row, level number per shelf, sample code per lab, and bacterium result per observation. | Must     | Inspection, Test | Data integrity |
+| FR-DATA-003 | The system shall enforce check constraints for exactly one of `growth_level`/`count`, non-negative counts, `iso_week` between 1 and 53, and `iso_year` greater than 0.                                                                               | Must     | Inspection, Test | Data integrity |
+| FR-DATA-004 | The system shall create organizations, memberships, and labs with their hierarchies inside database transactions.                                                                                                                                    | Must     | Test             | Data integrity |
+| FR-DATA-005 | The system shall not use soft deletes for organizations, labs, samples, or observations in this increment.                                                                                                                                           | Must     | Inspection       | D16            |
+| FR-DATA-006 | The system shall index observations by `(sample_id, observed_at)` and bacteria observations by `(observation_id, bacteria_id)`.                                                                                                                      | Must     | Inspection       | Performance    |
+| FR-DATA-007 | The system shall use bigint primary keys for all new tables.                                                                                                                                                                                         | Must     | Inspection       | D11            |
+| FR-DATA-008 | The system shall store explicit `iso_year` and `iso_week` on observations and a denormalized `lab_id` on samples to support a future ClickHouse mirror.                                                                                              | Must     | Inspection       | D11            |
+| FR-DATA-009 | The system shall not write to ClickHouse in this increment.                                                                                                                                                                                          | Must     | Inspection       | D11            |
+| FR-DATA-010 | The system shall retain observations until explicitly deleted through organization or lab cascade or the demo seeder.                                                                                                                                | Must     | Inspection       | D16            |
+
+**Notes**
+
+- Cascade deletes are synchronous. With millions of rows, deleting a large organization or lab may take time. This is accepted for the demo increment and can be moved to a queued job later.
+- There is no soft-delete or archive path in this increment.
+- The demo seeder is the only supported bulk deletion path for observations.
+
+---
+
+## 5. Non-functional requirements
+
+### 5.1 Performance
+
+| ID           | Requirement                                                                                                                       | Priority | Verification               |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------- |
+| NFR-PERF-001 | The lab map shall load within 2 seconds at p95 for a lab with 720 samples on the local environment.                               | Must     | Analysis, Performance test |
+| NFR-PERF-002 | The sample details endpoint shall respond within 500 ms at p95.                                                                   | Must     | Analysis, Performance test |
+| NFR-PERF-003 | The Manage Organizations and Labs pages shall respond within 500 ms at p95 with 3 organizations and 9 labs.                       | Must     | Analysis, Performance test |
+| NFR-PERF-004 | The stress seeder shall complete within 10 minutes and use no more than 512 MB of memory on the local environment.                | Must     | Analysis, Performance test |
+| NFR-PERF-005 | The lab map shall eager-load the hierarchy and execute a single current-state query; it shall not produce N+1 queries.            | Must     | Analysis, Test             |
+| NFR-PERF-006 | The current-state query shall use indexes and shall not perform a full scan of the bacteria observations table for a single lab.  | Must     | Analysis                   |
+| NFR-PERF-007 | The lab map shall load within 6 seconds at p95 for the largest seeded lab (1,280 levels, 3,840 samples) on the local environment. | Must     | Analysis, Performance test |
+
+### 5.2 Scalability
+
+| ID            | Requirement                                                                                                                           | Priority | Verification               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------- |
+| NFR-SCALE-001 | The PostgreSQL schema and map query shall support at least 19,440 samples, 790,000 observations, and 1,900,000 bacteria observations. | Must     | Analysis, Performance test |
+| NFR-SCALE-002 | The schema shall use bigint IDs and explicit ISO week columns so a future ClickHouse table can mirror the observation shape.          | Must     | Inspection                 |
+| NFR-SCALE-003 | The lab map shall remain usable without pagination at 1,280 levels and 3,840 samples.                                                 | Must     | Demonstration              |
+
+### 5.3 Security
+
+| ID          | Requirement                                                                                   | Priority | Verification     |
+| ----------- | --------------------------------------------------------------------------------------------- | -------- | ---------------- |
+| NFR-SEC-001 | All organization and lab routes shall require authentication and a verified email address.    | Must     | Test             |
+| NFR-SEC-002 | Authorization shall be enforced server-side through Laravel policies.                         | Must     | Test             |
+| NFR-SEC-003 | Cross-tenant access shall return HTTP 403 without revealing whether the resource exists.      | Must     | Test             |
+| NFR-SEC-004 | All input shall be validated through form requests; mass assignment shall be protected.       | Must     | Test, Inspection |
+| NFR-SEC-005 | State-changing requests shall be protected by CSRF tokens.                                    | Must     | Inspection       |
+| NFR-SEC-006 | No secrets or sensitive configuration shall be sent to the client.                            | Must     | Inspection       |
+| NFR-SEC-007 | The selected organization shall be validated against the user's memberships on every request. | Must     | Test             |
+
+### 5.4 Reliability
+
+| ID          | Requirement                                                          | Priority | Verification |
+| ----------- | -------------------------------------------------------------------- | -------- | ------------ |
+| NFR-REL-001 | Lab creation and hierarchy generation shall be atomic.               | Must     | Test         |
+| NFR-REL-002 | Organization creation and owner membership creation shall be atomic. | Must     | Test         |
+| NFR-REL-003 | The stress seeder shall be deterministic and idempotent.             | Must     | Test         |
+| NFR-REL-004 | Invalid week parameters shall fall back safely to the current week.  | Must     | Test         |
+| NFR-REL-005 | Cascade deletes shall not leave orphan rows.                         | Must     | Test         |
+
+### 5.5 Usability and accessibility
+
+| ID         | Requirement                                                                                         | Priority | Verification              |
+| ---------- | --------------------------------------------------------------------------------------------------- | -------- | ------------------------- |
+| NFR-UX-001 | The UI shall be responsive from 320 px to 1280 px and above.                                        | Must     | Demonstration             |
+| NFR-UX-002 | The UI shall meet WCAG 2.1 AA basics: labels, keyboard access, visible focus, and contrast.         | Must     | Inspection, Demonstration |
+| NFR-UX-003 | Growth level and presence shall not be conveyed by color alone; text labels shall accompany colors. | Must     | Inspection, Demonstration |
+| NFR-UX-004 | Forms shall display inline validation errors and preserve user input.                               | Must     | Test, Demonstration       |
+| NFR-UX-005 | The map shall provide a legend and clear empty states.                                              | Must     | Demonstration             |
+
+### 5.6 Maintainability
+
+| ID            | Requirement                                                                                                                 | Priority | Verification |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- | -------- | ------------ |
+| NFR-MAINT-001 | The implementation shall follow existing Laravel conventions: enums, policies, form requests, factories, and Inertia pages. | Must     | Inspection   |
+| NFR-MAINT-002 | `php artisan test` shall pass.                                                                                              | Must     | Test         |
+| NFR-MAINT-003 | Pint and PHPStan/Larastan shall pass.                                                                                       | Must     | Analysis     |
+| NFR-MAINT-004 | The TypeScript type check and frontend build shall pass.                                                                    | Must     | Analysis     |
+| NFR-MAINT-005 | No new runtime dependency shall be added without a documented justification.                                                | Should   | Inspection   |
+
+### 5.7 Portability
+
+| ID           | Requirement                                                  | Priority | Verification  |
+| ------------ | ------------------------------------------------------------ | -------- | ------------- |
+| NFR-PORT-001 | The module shall run on PostgreSQL 16 or later.              | Must     | Inspection    |
+| NFR-PORT-002 | The module shall run on the existing lerd local environment. | Must     | Demonstration |
+| NFR-PORT-003 | The module shall not require ClickHouse in this increment.   | Must     | Inspection    |
+
+### 5.8 Observability
+
+| ID          | Requirement                                                 | Priority | Verification  |
+| ----------- | ----------------------------------------------------------- | -------- | ------------- |
+| NFR-OBS-001 | The stress seeder shall report progress to the console.     | Should   | Demonstration |
+| NFR-OBS-002 | Application errors shall be written to the Laravel log.     | Must     | Inspection    |
+| NFR-OBS-003 | Logs shall not contain passwords, tokens, or other secrets. | Must     | Inspection    |
+
+### 5.9 Compliance
+
+| ID           | Requirement                                                                                                              | Priority | Verification |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------ | -------- | ------------ |
+| NFR-COMP-001 | ISO week calculations shall follow ISO 8601.                                                                             | Must     | Unit test    |
+| NFR-COMP-002 | Timezone identifiers shall be valid IANA identifiers.                                                                    | Must     | Test         |
+| NFR-COMP-003 | The module shall not introduce regulatory or personal data beyond existing user accounts and organization business data. | Must     | Inspection   |
+
+---
+
+## 6. External interface requirements
+
+### 6.1 User interfaces
+
+| Interface            | Description                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Manage Organizations | Lists the user's organizations with role, lab count, and create/edit/delete actions allowed by role.                |
+| Organization create  | Form with name, address, and IANA timezone.                                                                         |
+| Organization edit    | Form with name, address, and IANA timezone.                                                                         |
+| Labs index           | Lists the labs of the selected organization with structure and sample counts; create-lab action for owner/admin.    |
+| Lab create           | Form with name, code, notes, `row_count`, `shelves_per_row`, and `levels_per_shelf`; total-level preview.           |
+| Lab detail / map     | Header with lab data, week selector, legend, full rows → shelves → levels → samples map, and sample details drawer. |
+| Lab edit             | Form with name, code, and notes; read-only structure counts.                                                        |
+| Delete dialogs       | Confirmation dialogs for organization and lab deletion with dependent counts.                                       |
+| Navigation           | Labs, Organizations, and Bacteria items; organization switcher in the sidebar header; no Dashboard item.            |
+
+### 6.2 Software interfaces
+
+| Interface       | Description                                                                    |
+| --------------- | ------------------------------------------------------------------------------ |
+| PostgreSQL      | Primary data store through Laravel's `pgsql` connection.                       |
+| Laravel Fortify | Existing authentication and verification.                                      |
+| Inertia.js      | Server-to-client page props and forms.                                         |
+| Wayfinder       | Typed route helpers for the frontend.                                          |
+| shadcn-vue      | UI primitives: buttons, inputs, selects, cards, badges, sheets, alert dialogs. |
+| ClickHouse      | Configured but unused in this increment.                                       |
+
+### 6.3 API interfaces
+
+| Method | Path                                                  | Purpose                                          | Auth                |
+| ------ | ----------------------------------------------------- | ------------------------------------------------ | ------------------- |
+| GET    | `/labs`                                               | Labs of the selected organization.               | Verified member     |
+| GET    | `/labs/create`                                        | Lab creation form.                               | Owner/admin         |
+| POST   | `/labs`                                               | Create a lab under the selected organization.    | Owner/admin         |
+| GET    | `/labs/{lab}`                                         | Lab map.                                         | Organization member |
+| GET    | `/labs/{lab}/edit`                                    | Lab edit form.                                   | Owner/admin         |
+| PATCH  | `/labs/{lab}`                                         | Update lab metadata.                             | Owner/admin         |
+| DELETE | `/labs/{lab}`                                         | Delete a lab.                                    | Owner/admin         |
+| GET    | `/labs/{lab}/samples/{sample}/bacteria?week=YYYY-Www` | Sample bacteria details JSON.                    | Organization member |
+| GET    | `/organizations`                                      | Manage Organizations page.                       | Verified user       |
+| GET    | `/organizations/create`                               | Organization creation form.                      | Verified user       |
+| POST   | `/organizations`                                      | Create an organization and owner membership.     | Verified user       |
+| POST   | `/organizations/select`                               | Switch the selected organization in the session. | Organization member |
+| GET    | `/organizations/{organization}/edit`                  | Organization edit form.                          | Owner               |
+| PATCH  | `/organizations/{organization}`                       | Update an organization.                          | Owner               |
+| DELETE | `/organizations/{organization}`                       | Delete an organization.                          | Owner               |
+
+The organization id appears only in the Manage Organizations routes. Lab routes read the selected organization from the session.
+
+### 6.4 Data formats
+
+| Format                | Rule                                                          |
+| --------------------- | ------------------------------------------------------------- |
+| ISO week              | `YYYY-Www`, for example `2026-W45`.                           |
+| Timezone              | IANA identifier, for example `America/Sao_Paulo`.             |
+| Timestamp             | ISO 8601 in UTC for storage and transport.                    |
+| Growth level          | `high`, `medium`, `low`, `none`.                              |
+| Count                 | Non-negative integer.                                         |
+| Sample code           | `R{row}-S{shelf}-L{level}-{sequence:02}`.                     |
+| Lab structure         | `{row_count} × {shelves_per_row} × {levels_per_shelf}`.       |
+| Selected organization | Server-side session value; never a URL segment for lab pages. |
+
+### 6.5 Hardware interfaces
+
+None. The module is browser-based and server-rendered through the existing application stack.
+
+---
+
+## 7. Data requirements
+
+### 7.1 Entity relationship overview
+
+```
+User ──< organization_user >── Organization
+                                  │
+                                  └──< Lab
+                                        │
+                                        └──< LabRow
+                                              │
+                                              └──< LabShelf
+                                                    │
+                                                    └──< LabLevel
+                                                          │
+                                                          └──< Sample
+                                                                │
+                                                                └──< Observation
+                                                                      │
+                                                                      └──< BacteriaObservation >── Bacteria
+```
+
+### 7.2 Enumerations
+
+| Enum                      | Values                          | Usage                                |
+| ------------------------- | ------------------------------- | ------------------------------------ |
+| `OrganizationRole`        | `owner`, `admin`, `member`      | `organization_user.role`             |
+| `GrowthLevel`             | `high`, `medium`, `low`, `none` | `bacteria_observations.growth_level` |
+| `BacteriaObservationType` | `level`, `count`                | `bacteria.observation_type`          |
+
+### 7.3 Table definitions
+
+#### 7.3.1 `organizations`
+
+| Column       | Type         | Null | Default | Constraints                         | Description            |
+| ------------ | ------------ | ---- | ------- | ----------------------------------- | ---------------------- |
+| `id`         | bigint       | No   | auto    | PK                                  | Primary key.           |
+| `name`       | varchar(255) | No   |         | Unique                              | Organization name.     |
+| `address`    | text         | No   |         |                                     | Single-field address.  |
+| `timezone`   | varchar(64)  | No   |         | Valid IANA identifier (application) | Organization timezone. |
+| `created_at` | timestamptz  | Yes  |         |                                     | Creation timestamp.    |
+| `updated_at` | timestamptz  | Yes  |         |                                     | Update timestamp.      |
+
+#### 7.3.2 `organization_user`
+
+| Column            | Type        | Null | Default  | Constraints                         | Description         |
+| ----------------- | ----------- | ---- | -------- | ----------------------------------- | ------------------- |
+| `id`              | bigint      | No   | auto     | PK                                  | Primary key.        |
+| `organization_id` | bigint      | No   |          | FK → `organizations.id`, cascade    | Organization.       |
+| `user_id`         | bigint      | No   |          | FK → `users.id`, cascade            | User.               |
+| `role`            | varchar(16) | No   | `member` | Check in `owner`, `admin`, `member` | Membership role.    |
+| `created_at`      | timestamptz | Yes  |          |                                     | Creation timestamp. |
+| `updated_at`      | timestamptz | Yes  |          |                                     | Update timestamp.   |
+
+Unique: `(organization_id, user_id)`. Index: `user_id`.
+
+#### 7.3.3 `labs`
+
+| Column             | Type         | Null | Default | Constraints                                     | Description                                           |
+| ------------------ | ------------ | ---- | ------- | ----------------------------------------------- | ----------------------------------------------------- |
+| `id`               | bigint       | No   | auto    | PK                                              | Primary key.                                          |
+| `organization_id`  | bigint       | No   |         | FK → `organizations.id`, cascade                | Owning organization.                                  |
+| `name`             | varchar(255) | No   |         | Unique `(organization_id, name)`                | Lab name.                                             |
+| `code`             | varchar(50)  | Yes  | null    | Unique `(organization_id, code)` where not null | Optional lab code.                                    |
+| `notes`            | text         | Yes  | null    |                                                 | Optional notes.                                       |
+| `row_count`        | smallint     | No   |         | Check 1–20                                      | Number of rows created.                               |
+| `shelves_per_row`  | smallint     | No   |         | Check 1–20                                      | Shelves per row at creation.                          |
+| `levels_per_shelf` | smallint     | No   |         | Check 1–20                                      | Levels per shelf at creation.                         |
+| `created_at`       | timestamptz  | Yes  |         |                                                 | Creation timestamp; used for the week selector start. |
+| `updated_at`       | timestamptz  | Yes  |         |                                                 | Update timestamp.                                     |
+
+Index: `organization_id`.
+
+#### 7.3.4 `lab_rows`
+
+| Column       | Type        | Null | Default | Constraints                          | Description         |
+| ------------ | ----------- | ---- | ------- | ------------------------------------ | ------------------- |
+| `id`         | bigint      | No   | auto    | PK                                   | Primary key.        |
+| `lab_id`     | bigint      | No   |         | FK → `labs.id`, cascade              | Lab.                |
+| `number`     | smallint    | No   |         | Unique `(lab_id, number)`, check ≥ 1 | Row number.         |
+| `created_at` | timestamptz | Yes  |         |                                      | Creation timestamp. |
+| `updated_at` | timestamptz | Yes  |         |                                      | Update timestamp.   |
+
+Index: `lab_id`.
+
+#### 7.3.5 `lab_shelves`
+
+| Column       | Type        | Null | Default | Constraints                              | Description         |
+| ------------ | ----------- | ---- | ------- | ---------------------------------------- | ------------------- |
+| `id`         | bigint      | No   | auto    | PK                                       | Primary key.        |
+| `lab_row_id` | bigint      | No   |         | FK → `lab_rows.id`, cascade              | Row.                |
+| `number`     | smallint    | No   |         | Unique `(lab_row_id, number)`, check ≥ 1 | Shelf number.       |
+| `created_at` | timestamptz | Yes  |         |                                          | Creation timestamp. |
+| `updated_at` | timestamptz | Yes  |         |                                          | Update timestamp.   |
+
+Index: `lab_row_id`.
+
+#### 7.3.6 `lab_levels`
+
+| Column         | Type        | Null | Default | Constraints                                | Description         |
+| -------------- | ----------- | ---- | ------- | ------------------------------------------ | ------------------- |
+| `id`           | bigint      | No   | auto    | PK                                         | Primary key.        |
+| `lab_shelf_id` | bigint      | No   |         | FK → `lab_shelves.id`, cascade             | Shelf.              |
+| `number`       | smallint    | No   |         | Unique `(lab_shelf_id, number)`, check ≥ 1 | Level number.       |
+| `created_at`   | timestamptz | Yes  |         |                                            | Creation timestamp. |
+| `updated_at`   | timestamptz | Yes  |         |                                            | Update timestamp.   |
+
+Index: `lab_shelf_id`.
+
+#### 7.3.7 `samples`
+
+| Column         | Type        | Null | Default | Constraints                   | Description              |
+| -------------- | ----------- | ---- | ------- | ----------------------------- | ------------------------ |
+| `id`           | bigint      | No   | auto    | PK                            | Primary key.             |
+| `lab_id`       | bigint      | No   |         | FK → `labs.id`, cascade       | Denormalized owning lab. |
+| `lab_level_id` | bigint      | No   |         | FK → `lab_levels.id`, cascade | Fixed level.             |
+| `code`         | varchar(32) | No   |         | Unique `(lab_id, code)`       | Generated sample code.   |
+| `created_at`   | timestamptz | Yes  |         |                               | Creation timestamp.      |
+| `updated_at`   | timestamptz | Yes  |         |                               | Update timestamp.        |
+
+Indexes: `lab_id`, `lab_level_id`.
+
+#### 7.3.8 `observations`
+
+| Column        | Type        | Null | Default | Constraints                | Description                            |
+| ------------- | ----------- | ---- | ------- | -------------------------- | -------------------------------------- |
+| `id`          | bigint      | No   | auto    | PK                         | Primary key.                           |
+| `sample_id`   | bigint      | No   |         | FK → `samples.id`, cascade | Sample.                                |
+| `observed_at` | timestamptz | No   |         |                            | Reading timestamp in UTC.              |
+| `iso_year`    | smallint    | No   |         | Check > 0                  | ISO year in the organization timezone. |
+| `iso_week`    | smallint    | No   |         | Check 1–53                 | ISO week in the organization timezone. |
+| `created_at`  | timestamptz | Yes  |         |                            | Creation timestamp.                    |
+| `updated_at`  | timestamptz | Yes  |         |                            | Update timestamp.                      |
+
+Unique: `(sample_id, observed_at)`.
+Indexes: `(sample_id, observed_at)`, `(sample_id, iso_year, iso_week, observed_at)`.
+
+#### 7.3.9 `bacteria_observations`
+
+| Column           | Type        | Null | Default | Constraints                              | Description         |
+| ---------------- | ----------- | ---- | ------- | ---------------------------------------- | ------------------- |
+| `id`             | bigint      | No   | auto    | PK                                       | Primary key.        |
+| `observation_id` | bigint      | No   |         | FK → `observations.id`, cascade          | Reading.            |
+| `bacteria_id`    | bigint      | No   |         | FK → `bacteria.id`, restrict             | Bacterium.          |
+| `growth_level`   | varchar(8)  | Yes  | null    | Check in `high`, `medium`, `low`, `none` | Level result.       |
+| `count`          | integer     | Yes  | null    | Check ≥ 0                                | Count result.       |
+| `created_at`     | timestamptz | Yes  |         |                                          | Creation timestamp. |
+| `updated_at`     | timestamptz | Yes  |         |                                          | Update timestamp.   |
+
+Unique: `(observation_id, bacteria_id)`.
+Check: exactly one of `growth_level` or `count` is non-null.
+Indexes: `observation_id`, `bacteria_id`.
+
+#### 7.3.10 `bacteria` (existing table extension)
+
+| Column             | Type       | Null | Default | Constraints               | Description                      |
+| ------------------ | ---------- | ---- | ------- | ------------------------- | -------------------------------- |
+| `observation_type` | varchar(8) | No   | `level` | Check in `level`, `count` | Level or count observation type. |
+
+Existing columns remain: `id`, `name`, `short_name`, `description`, `color`, `icon`, `created_at`, `updated_at`.
+
+### 7.4 Indexes and constraints
+
+| Table                   | Index / Constraint                                     | Purpose                                   |
+| ----------------------- | ------------------------------------------------------ | ----------------------------------------- |
+| `organizations`         | Unique `name`                                          | Organization lookup and uniqueness.       |
+| `organization_user`     | Unique `(organization_id, user_id)`                    | One membership per user per organization. |
+| `organization_user`     | Index `user_id`                                        | List a user's organizations.              |
+| `labs`                  | Unique `(organization_id, name)`                       | Lab name uniqueness per organization.     |
+| `labs`                  | Unique `(organization_id, code)` where `code` not null | Lab code uniqueness per organization.     |
+| `labs`                  | Index `organization_id`                                | List labs for an organization.            |
+| `lab_rows`              | Unique `(lab_id, number)`                              | Row numbering.                            |
+| `lab_shelves`           | Unique `(lab_row_id, number)`                          | Shelf numbering.                          |
+| `lab_levels`            | Unique `(lab_shelf_id, number)`                        | Level numbering.                          |
+| `samples`               | Unique `(lab_id, code)`                                | Sample code uniqueness per lab.           |
+| `samples`               | Index `lab_id`, `lab_level_id`                         | Lab and level lookups.                    |
+| `observations`          | Unique `(sample_id, observed_at)`                      | One reading per sample per timestamp.     |
+| `observations`          | Index `(sample_id, observed_at)`                       | Latest-state and week queries.            |
+| `observations`          | Index `(sample_id, iso_year, iso_week, observed_at)`   | Weekly grouping and analytics.            |
+| `bacteria_observations` | Unique `(observation_id, bacteria_id)`                 | One result per bacterium per reading.     |
+| `bacteria_observations` | Check exactly one of `growth_level`/`count`            | Result shape integrity.                   |
+| `bacteria_observations` | Index `observation_id`, `bacteria_id`                  | Join and bacterium lookups.               |
+
+### 7.5 Data quality rules
+
+| Rule                                                                        | Enforcement                                        |
+| --------------------------------------------------------------------------- | -------------------------------------------------- |
+| Level bacteria have `growth_level` and no `count`.                          | Application validation; DB exactly-one check.      |
+| Count bacteria have `count` and no `growth_level`.                          | Application validation; DB exactly-one check.      |
+| `none` is recorded only on a positive-to-absent transition.                 | Application/seeder logic.                          |
+| `0` is recorded only on a positive-to-absent transition.                    | Application/seeder logic.                          |
+| No rows while a bacterium remains absent.                                   | Application/seeder logic.                          |
+| A reading records every present bacterium and every transition to absent.   | Application/seeder logic.                          |
+| No observation with zero bacteria observations.                             | Application/seeder logic.                          |
+| `observed_at` is not in the future.                                         | Application validation.                            |
+| `iso_year` and `iso_week` match `observed_at` in the organization timezone. | Write-time computation and application validation. |
+| Sample code is unique per lab.                                              | DB unique constraint.                              |
+| Sample location is fixed.                                                   | Application: no update path.                       |
+| Lab structure counts are immutable.                                         | Application: update form excludes them.            |
+| No observation before lab creation.                                         | Application/seeder logic.                          |
+| Count is non-negative.                                                      | DB check.                                          |
+| Exactly one result field is set.                                            | DB check.                                          |
+
+### 7.6 Data volume estimates
+
+See Section 3.4. The stress dataset is a planning target, not a hard acceptance limit. The map must remain usable at that scale.
+
+### 7.7 Migration order
+
+1. `create_organizations_table`
+2. `create_organization_user_table`
+3. `create_labs_table`
+4. `create_lab_rows_table`
+5. `create_lab_shelves_table`
+6. `create_lab_levels_table`
+7. `create_samples_table`
+8. `create_observations_table`
+9. `create_bacteria_observations_table`
+10. `add_observation_type_to_bacteria_table`
+
+Each migration must be reversible. Foreign keys are added in the migration that creates the child table.
+
+### 7.8 Retention and deletion
+
+- Organizations and labs are hard-deleted after confirmation.
+- Deletion cascades to all dependent rows.
+- Observations are retained until an organization or lab is deleted or the demo seeder truncates demo data.
+- No soft deletes.
+- The demo seeder is the only supported bulk deletion path for observations.
+- Users and the bacteria catalog are preserved by the demo seeder.
+
+---
+
+## 8. Constraints
+
+### 8.1 Technical constraints
+
+- Laravel 13, PHP 8.5.
+- PostgreSQL as the only database for this increment.
+- Inertia.js 3, Vue 3, shadcn-vue, Wayfinder, Fortify.
+- Pest for tests.
+- PHPStan/Larastan, Pint, TypeScript checks, and the existing build pipeline.
+- No new runtime dependency without justification.
+- Existing starter-kit structure and conventions.
+
+### 8.2 Business constraints
+
+- PostgreSQL first; ClickHouse later.
+- The demo seeder is for local/demo use, not production.
+- Manual observation creation is deferred.
+- Membership management UI is deferred.
+- Sample CRUD is deferred.
+- Lab structure counts are fixed at creation.
+
+### 8.3 Design constraints
+
+- Follow the existing app shell, sidebar, breadcrumbs, and shadcn-vue components.
+- No emojis in the UI.
+- Use text labels alongside colors.
+- The lab map must be a full map, not paginated or collapsed.
+- The map's visual language is a heat scale for growth levels plus numeric badges for counts.
+
+### 8.4 Regulatory constraints
+
+None identified. The module stores user accounts and organization business data only.
+
+### 8.5 Schedule and budget
+
+Not specified in this document.
+
+---
+
+## 9. Assumptions and dependencies
+
+### 9.1 Assumptions
+
+| ID    | Assumption                                                                                      |
+| ----- | ----------------------------------------------------------------------------------------------- |
+| A-001 | The existing bacteria catalog of 10 organisms is the complete catalog for this increment.       |
+| A-002 | Organization users have verified email addresses.                                               |
+| A-003 | The organization timezone applies to all its labs.                                              |
+| A-004 | A reading is per sample; there are no batch readings covering multiple samples.                 |
+| A-005 | All bacteria results in one observation share the same `observed_at`.                           |
+| A-006 | The demo seeder is the only writer of observations in this increment.                           |
+| A-007 | The current ISO week is partial; its state is the latest observation so far.                    |
+| A-008 | Lab creation date is the lab's `created_at` timestamp.                                          |
+| A-009 | Seeded labs receive randomized `created_at` values; manually created labs use the current time. |
+| A-010 | ClickHouse is not required for this increment.                                                  |
+| A-011 | The test database is PostgreSQL.                                                                |
+| A-012 | The existing `DatabaseSeeder` continues to create the base user and bacteria catalog.           |
+| A-013 | The demo seeder is run explicitly and may be destructive to demo data.                          |
+| A-014 | The map's sample details endpoint is a JSON endpoint, not an Inertia page.                      |
+| A-015 | The 1–20 dimension limit is acceptable for manual lab creation; the seeder bypasses the form.   |
+| A-016 | The selected organization is per user session, so all open tabs share the same selection.       |
+| A-017 | A user with no memberships sees an empty Labs page and can create an organization from there.   |
+| A-018 | Organization ids remain in Manage Organizations URLs only; lab URLs never contain them.         |
+| A-019 | The Dashboard page is not part of this increment and sign-in redirects to Labs.                 |
+
+### 9.2 Dependencies
+
+| ID      | Dependency                                             |
+| ------- | ------------------------------------------------------ |
+| DEP-001 | Existing Laravel application and starter kit.          |
+| DEP-002 | Existing PostgreSQL service and credentials.           |
+| DEP-003 | Existing authentication and verified-email middleware. |
+| DEP-004 | Existing bacteria catalog and `BacteriaSeeder`.        |
+| DEP-005 | Existing shadcn-vue component library.                 |
+| DEP-006 | Existing Wayfinder route generation.                   |
+| DEP-007 | Existing Pest test setup.                              |
+| DEP-008 | Existing lerd local environment.                       |
+
+---
+
+## 10. Verification and acceptance
+
+### 10.1 Verification methods
+
+| Method        | Meaning                                                                               |
+| ------------- | ------------------------------------------------------------------------------------- |
+| Test          | Automated Pest test with assertions.                                                  |
+| Demonstration | Manual walkthrough of the UI or seeder output.                                        |
+| Inspection    | Code, schema, or configuration review.                                                |
+| Analysis      | Reasoning about performance, complexity, or data volume, optionally with measurement. |
+
+### 10.2 Requirement verification summary
+
+| Feature area                 | Requirements              | Primary methods                                    |
+| ---------------------------- | ------------------------- | -------------------------------------------------- |
+| Organization management      | FR-ORG-001 – FR-ORG-020   | Feature tests, demonstration                       |
+| Membership and authorization | FR-AUTH-001 – FR-AUTH-015 | Feature tests                                      |
+| Lab management and hierarchy | FR-LAB-001 – FR-LAB-020   | Feature tests, unit tests                          |
+| Samples                      | FR-SMP-001 – FR-SMP-009   | Feature tests, unit tests                          |
+| Observations                 | FR-OBS-001 – FR-OBS-025   | Feature tests, unit tests, DB inspection           |
+| Weekly state and cycles      | FR-WK-001 – FR-WK-010     | Unit tests, feature tests                          |
+| Lab map and week selector    | FR-MAP-001 – FR-MAP-028   | Feature tests, demonstration, performance analysis |
+| Seeding                      | FR-SEED-001 – FR-SEED-025 | Feature tests, demonstration, performance analysis |
+| Navigation and UI            | FR-UI-001 – FR-UI-014     | Demonstration, feature tests                       |
+| Data integrity               | FR-DATA-001 – FR-DATA-010 | DB inspection, feature tests                       |
+
+### 10.3 Test plan
+
+#### 10.3.1 Unit tests
+
+| Test area        | Cases                                                                                                                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Enums            | `GrowthLevel` rank and labels; `OrganizationRole` permissions; `BacteriaObservationType` labels.                                                                                        |
+| ISO week         | Monday–Sunday boundaries; week 1 containing January 4; timezone boundary (for example, 2025-12-29 01:30 UTC in America/Sao_Paulo belongs to 2025-W52 while UTC is already in 2026-W01). |
+| Sample code      | `R1-S2-L3-01` format; per-level sequence.                                                                                                                                               |
+| Weekly state     | Latest observation before week end; carry-forward; no observation ever; `none`/`0` absent.                                                                                              |
+| Cycles           | Positive run terminated by `none`/`0`; reappearance starts a new cycle.                                                                                                                 |
+| Seeder generator | Small deterministic dataset with expected counts and transitions.                                                                                                                       |
+
+#### 10.3.2 Feature tests
+
+| Test area                  | Cases                                                                                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Organization CRUD          | Create, list own organizations, update, delete; validation; unique name; invalid timezone.                                                         |
+| Organization authorization | Owner can update/delete; admin/member cannot; non-member 403; guest redirect.                                                                      |
+| Selected organization      | Switch persists in session; non-member switch 403; fallback to first organization; deletion clears selection; lab URLs contain no organization id. |
+| Labs page                  | Lists only the selected organization's labs; empty state without a membership; lab outside the selected organization returns 404.                  |
+| Lab CRUD                   | Create with hierarchy under the selected organization; name/code uniqueness; counts immutable; update metadata; delete cascade.                    |
+| Lab authorization          | Owner/admin can create/update/delete; member cannot; non-member 403.                                                                               |
+| Lab map                    | Week selector range; default current week; invalid week fallback; empty state.                                                                     |
+| Map state                  | Carry-forward; `none`/`0` hidden; reappearance; highest level; count badge; mixed cells.                                                           |
+| Sample details             | Correct selected-week state; authorization; missing sample 404.                                                                                    |
+| Seeder                     | Small configuration; truncation; deterministic output; preserves users/bacteria.                                                                   |
+| Existing bacteria pages    | Still pass with the new `observation_type` attribute.                                                                                              |
+
+#### 10.3.3 Manual verification
+
+- Create an organization and a lab through the UI.
+- Switch the selected organization from the sidebar and confirm the Labs page lists only that organization's labs.
+- Confirm the organization id never appears in a lab URL.
+- Confirm the Dashboard page and menu item are absent and sign-in lands on Labs.
+- Confirm the hierarchy counts and sample count display.
+- Run the stress seeder and open a lab map.
+- Change the week selector and confirm carry-forward.
+- Open a sample drawer and confirm bacteria details.
+- Check the map at 320 px, 768 px, and 1280 px.
+- Check keyboard navigation and visible focus.
+- Confirm role-based button visibility.
+- Confirm delete confirmations and cascade behavior on a small dataset.
+
+### 10.4 Acceptance scenarios
+
+#### AS-001 — Owner creates an organization and lab
+
+Given a verified user,
+When they create an organization with a name, address, and timezone,
+Then they become the owner,
+And the organization appears on the Manage Organizations page,
+And the new organization becomes the selected organization,
+And the Labs page is empty until they create a lab with 5 rows × 6 shelves × 8 levels,
+And the lab map shows 240 levels and the generated structure.
+
+#### AS-002 — Admin manages labs but not the organization
+
+Given an admin of an organization,
+When they open the Manage Organizations page,
+Then they cannot update or delete the organization,
+And the organization edit/delete controls are hidden,
+And when they open the Labs page they can create, edit, and delete labs.
+
+#### AS-003 — Member views but cannot modify
+
+Given a member of an organization,
+When they open the Labs page and a lab,
+Then they can view the labs and the lab map,
+And they cannot create, edit, or delete labs,
+And direct requests to modify resources return 403.
+
+#### AS-004 — Non-member is denied
+
+Given an authenticated user who is not a member of an organization,
+When they request a lab of that organization,
+Then the system returns 403.
+
+#### AS-005 — Stress seeder produces a usable map
+
+Given an empty demo dataset,
+When the operator runs `php artisan db:seed --class=DemoStressSeeder`,
+Then three organizations, nine labs, 19,440 samples, and the observation dataset are created,
+And the seeder completes within 10 minutes,
+And the largest lab has 1,280 sample places and a lab map renders 3,840 sample cells.
+
+#### AS-006 — Week selector and carry-forward
+
+Given a lab with observations in week 1 and no observation in week 2,
+When the user selects week 2,
+Then the map shows the week 1 state for each sample+bacterium.
+
+#### AS-007 — NONE/zero hidden and reappearance
+
+Given a level bacterium with a `none` observation in week 3,
+When the user selects week 3,
+Then the bacterium is hidden from the sample cell,
+And when a new positive observation appears in week 5,
+Then the bacterium is shown again in week 5.
+
+Given a count bacterium with a `0` observation in week 3,
+When the user selects week 3,
+Then the bacterium is hidden,
+And a later positive count shows it again.
+
+#### AS-008 — Cell summary rules
+
+Given a sample with one present bacterium,
+Then the cell shows that bacterium's icon/color and its level or count.
+Given a sample with multiple level bacteria,
+Then the cell shows the highest level and the total number of present bacteria.
+Given a sample with count bacteria,
+Then the cell shows the highest count as a numeric badge.
+Given a sample with mixed level and count bacteria,
+Then the cell shows the highest level and the count badge.
+Given a sample with no present bacteria,
+Then the cell is empty and gray.
+
+#### AS-009 — Lab creation counts are immutable
+
+Given an existing lab,
+When the user opens the edit form,
+Then the structure counts are read-only,
+And a direct request attempting to change them does not alter the hierarchy.
+
+#### AS-010 — Deletion cascades
+
+Given an organization with labs, samples, and observations,
+When the owner deletes the organization after confirmation,
+Then all dependent rows are removed,
+And no orphan rows remain.
+
+#### AS-011 — Selected organization switch
+
+Given a user who belongs to two organizations,
+When they pick the second organization in the sidebar switcher,
+Then the selection is stored in the server-side session,
+And they land on the Labs page,
+And only the second organization's labs are listed,
+And no organization id appears in the URL.
+
+#### AS-012 — Lab outside the selected organization
+
+Given a member of two organizations with the first one selected,
+When they request a lab that belongs to the second organization,
+Then the system returns 404,
+And when a non-member requests the same lab,
+Then the system returns 403.
+
+#### AS-013 — No dashboard
+
+Given a signed-in user,
+When they sign in or complete email verification,
+Then they land on the Labs page,
+And no dashboard page or navigation item exists.
+
+### 10.5 Definition of done
+
+- All migrations run successfully on PostgreSQL.
+- The `DemoStressSeeder` completes and produces the expected dataset.
+- The lab map renders 3,840 samples and the week selector works.
+- The dashboard page and navigation item are removed and sign-in redirects to Labs.
+- The selected organization lives in the session, the switcher changes it, and lab URLs contain no organization id.
+- `php artisan test` passes.
+- `vendor/bin/pint --test` passes.
+- `vendor/bin/phpstan analyse` passes.
+- `npm run types:check` and the frontend build pass.
+- No N+1 queries on the lab map.
+- The README documents the new models and the stress seeder command.
+- The SRS is approved and the implementation matches the approved scope.
+
+---
+
+## 11. Traceability
+
+### 11.1 Source decisions
+
+| ID  | Decision                                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------- |
+| D1  | The three dimensions are named Row, Shelf, and Level.                                                   |
+| D2  | The dimensions are modeled as three hierarchy tables: `lab_rows` → `lab_shelves` → `lab_levels`.        |
+| D3  | Samples have a generated code and are fixed to their level for life.                                    |
+| D4  | Observations are raw readings: one parent reading with many bacteria results.                           |
+| D5  | ISO year and week are stored, computed in the organization timezone.                                    |
+| D6  | Level bacteria use `growth_level` with `high`, `medium`, `low`, `none`.                                 |
+| D7  | Count observations use a nullable count with a catalog flag; superseded by D18/D19 for the final split. |
+| D8  | Users belong to organizations; tenancy is scoped by membership.                                         |
+| D9  | Organization address is a single text field.                                                            |
+| D10 | Lab fields are name, optional code, and optional notes.                                                 |
+| D11 | PostgreSQL first; ClickHouse is deferred.                                                               |
+| D12 | `none` is recorded only on a positive-to-absent transition; no rows while absent.                       |
+| D13 | Weekly state is the latest observation before week end, carried forward.                                |
+| D14 | Cycles are derived from the event stream, not stored.                                                   |
+| D15 | Lab structure counts are fixed at creation and immutable.                                               |
+| D16 | Organization and Lab CRUD are in scope; the lab detail page is the full map.                            |
+| D17 | Organization roles are owner, admin, and member.                                                        |
+| D18 | Six level bacteria and four count bacteria.                                                             |
+| D19 | Count bacteria are count-only; `0` closes a cycle.                                                      |
+| D20 | Owner all, admin labs, member read-only; any user can create an organization.                           |
+| D21 | The lab map is a full rows → shelves → levels → samples map with a highest-level summary.               |
+| D22 | The stress seeder is a dedicated, explicit, destructive demo seeder.                                    |
+| D23 | Seeding uses the realistic mixed distribution and the larger stress volume.                             |
+| D24 | The lab map has a week selector.                                                                        |
+| D25 | Map cells show the highest level and count badges, with details in a drawer.                            |
+| D26 | The initial map payload contains summaries; details are lazy-loaded.                                    |
+| D27 | The current-state query runs on the fly with indexes.                                                   |
+| D28 | The map layout is rows → shelves → levels.                                                              |
+| D29 | The week selector starts at the lab creation week; lab creation dates are randomized in the seeder.     |
+| D30 | The selector runs through the current week and defaults to the current week.                            |
+| D31 | Seeded labs are created 26–20 weeks ago.                                                                |
+| D32 | First readings occur after a random 0–4 week delay.                                                     |
+| D33 | The selected organization lives in the server-side session; lab URLs carry no organization id.          |
+| D34 | The Dashboard page is removed; sign-in and email verification redirect to Labs.                         |
+| D35 | Labs and Manage Organizations are separate pages: Labs scopes to the selected organization.             |
+| D36 | Switching the selected organization redirects to the Labs page.                                         |
+
+### 11.2 Requirement-to-design traceability
+
+| Feature area                 | Requirements              | Models                                      | Controllers / Actions                                          | Pages / Components                                  | Tests                                 |
+| ---------------------------- | ------------------------- | ------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------- |
+| Organization management      | FR-ORG-001 – FR-ORG-020   | `Organization`, `OrganizationMembership`    | `OrganizationController`, form requests, `OrganizationPolicy`  | `organizations/Index.vue`, `Create.vue`, `Edit.vue` | `OrganizationPageTest`                |
+| Selected organization        | FR-ORG-014 – FR-ORG-020   | `Organization`, `User`                      | `ResolveSelectedOrganization`, `OrganizationController@select` | `OrganizationSwitcher.vue`                          | `OrganizationPageTest`, `LabPageTest` |
+| Membership and authorization | FR-AUTH-001 – FR-AUTH-015 | `OrganizationMembership`, `User`            | Policies, middleware                                           | Role-aware UI                                       | `AuthorizationTest`                   |
+| Lab management and hierarchy | FR-LAB-001 – FR-LAB-020   | `Lab`, `LabRow`, `LabShelf`, `LabLevel`     | `LabController`, `CreateLab` action, `LabPolicy`               | `labs/Index.vue`, `Create.vue`, `Edit.vue`          | `LabPageTest`                         |
+| Samples                      | FR-SMP-001 – FR-SMP-009   | `Sample`                                    | Seeder, future ingestion                                       | —                                                   | `SampleTest`                          |
+| Observations                 | FR-OBS-001 – FR-OBS-025   | `Observation`, `BacteriaObservation`, enums | Seeder, future ingestion                                       | —                                                   | `ObservationTest`                     |
+| Weekly state and cycles      | FR-WK-001 – FR-WK-010     | `Observation`, `BacteriaObservation`        | `LabMapQuery` / service                                        | Map                                                 | `WeeklyStateTest`                     |
+| Lab map and week selector    | FR-MAP-001 – FR-MAP-028   | —                                           | `LabController@show`, `SampleBacteriaController`               | `labs/Show.vue`, map components, drawer             | `LabMapTest`                          |
+| Seeding                      | FR-SEED-001 – FR-SEED-025 | All models                                  | `DemoStressSeeder`, generator service                          | —                                                   | `DemoStressSeederTest`                |
+| Navigation and UI            | FR-UI-001 – FR-UI-014     | —                                           | —                                                              | Sidebar, organization switcher, forms, dialogs      | `NavigationTest`, manual              |
+| Data integrity               | FR-DATA-001 – FR-DATA-010 | Migrations, models                          | —                                                              | —                                                   | `SchemaTest`, feature tests           |
+
+### 11.3 Requirement-to-verification traceability
+
+Each requirement table in Section 4 includes its verification method. The summary:
+
+| Verification method | Requirement groups                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| Automated tests     | FR-ORG, FR-AUTH, FR-LAB, FR-SMP, FR-OBS, FR-WK, FR-MAP, FR-SEED, FR-UI, FR-DATA                          |
+| Demonstration       | FR-ORG-013, FR-MAP-001/002/016/017/022/023/024, FR-SEED-023, FR-UI-001/002/005/009/010/013/014           |
+| Inspection          | FR-AUTH-008, FR-OBS-018/019/020, FR-SEED-001/002/003/021/022, FR-DATA-005/007/008/009/010, NFR-SCALE-002 |
+| Analysis            | NFR-PERF, NFR-SCALE, seeder performance                                                                  |
+
+---
+
+## 12. Appendices
+
+### Appendix A — Decision log
+
+| ID  | Decision                                                   | Round |
+| --- | ---------------------------------------------------------- | ----- |
+| D1  | Row / Shelf / Level naming.                                | 1     |
+| D2  | Three hierarchy tables.                                    | 1     |
+| D3  | Sample code + fixed location.                              | 1     |
+| D4  | Raw readings.                                              | 1     |
+| D5  | ISO year/week in organization timezone.                    | 1     |
+| D6  | `growth_level` + `none` semantics.                         | 1     |
+| D7  | Nullable count + catalog flag.                             | 1     |
+| D8  | Users belong to organizations.                             | 1     |
+| D9  | Single address field.                                      | 1     |
+| D10 | Lab name + code + notes.                                   | 1     |
+| D11 | PostgreSQL first, ClickHouse later.                        | 1     |
+| D12 | `none` transition-only.                                    | 2     |
+| D13 | Weekly state carry-forward.                                | 2     |
+| D14 | Cycles derived.                                            | 2     |
+| D15 | Lab counts fixed at creation.                              | 2     |
+| D16 | Organization + Lab CRUD; lab shows map.                    | 2     |
+| D17 | Roles owner/admin/member.                                  | 2     |
+| D18 | Six level, four count split.                               | 3     |
+| D19 | Count-only, `0` closes cycle.                              | 3     |
+| D20 | Permission matrix.                                         | 3     |
+| D21 | Full lab map with highest-level summary.                   | 3     |
+| D22 | Dedicated stress seeder.                                   | 3     |
+| D23 | Realistic mixed distribution and larger stress volume.     | 3     |
+| D24 | Week selector.                                             | 4     |
+| D25 | Highest level + count badge cell summary.                  | 4     |
+| D26 | Summary payload + lazy details.                            | 4     |
+| D27 | Query on the fly.                                          | 4     |
+| D28 | Rows → shelves → levels layout.                            | 4     |
+| D29 | All weeks since lab creation; randomize lab creation date. | 5     |
+| D30 | Through current week, default current.                     | 6     |
+| D31 | Seeded labs created 26–20 weeks ago.                       | 6     |
+| D32 | First readings after 0–4 week delay.                       | 6     |
+| D33 | Selected organization in the server session.               | 7     |
+| D34 | Dashboard removed; sign-in redirects to Labs.              | 7     |
+| D35 | Labs and Manage Organizations are separate pages.          | 7     |
+| D36 | Organization switch redirects to Labs.                     | 7     |
+
+### Appendix B — Example observation timelines
+
+#### B.1 Level bacterium cycle
+
+| Week | Observation | Weekly state | Map    |
+| ---- | ----------- | ------------ | ------ |
+| 1    | HIGH        | HIGH         | Shown  |
+| 2    | MEDIUM      | MEDIUM       | Shown  |
+| 3    | NONE        | Absent       | Hidden |
+| 4    | —           | Absent       | Hidden |
+| 5    | —           | Absent       | Hidden |
+| 6    | LOW         | LOW          | Shown  |
+| 7    | NONE        | Absent       | Hidden |
+
+#### B.2 Count bacterium cycle
+
+| Week | Observation | Weekly state | Map    |
+| ---- | ----------- | ------------ | ------ |
+| 1    | 1200        | 1200         | Shown  |
+| 2    | 800         | 800          | Shown  |
+| 3    | 0           | Absent       | Hidden |
+| 4    | —           | Absent       | Hidden |
+| 5    | 5000        | 5000         | Shown  |
+| 6    | 0           | Absent       | Hidden |
+
+#### B.3 Carry-forward
+
+| Week | Observation | Weekly state |
+| ---- | ----------- | ------------ |
+| 1    | HIGH        | HIGH         |
+| 2    | —           | HIGH         |
+| 3    | —           | HIGH         |
+| 4    | NONE        | Absent       |
+| 5    | —           | Absent       |
+
+#### B.4 Mixed sample cell
+
+Given a sample with Salmonella HIGH, E. coli LOW, and C. perfringens count 1200 in the selected week:
+
+- Cell heat color: HIGH.
+- Group indicator: 2 level bacteria.
+- Count badge: 1.2k.
+- Drawer: Salmonella HIGH, E. coli LOW, C. perfringens 1200.
+
+### Appendix C — Migration list
+
+| Order | Migration                                | Purpose                    |
+| ----- | ---------------------------------------- | -------------------------- |
+| 1     | `create_organizations_table`             | Organizations.             |
+| 2     | `create_organization_user_table`         | Memberships and roles.     |
+| 3     | `create_labs_table`                      | Labs and structure counts. |
+| 4     | `create_lab_rows_table`                  | Rows.                      |
+| 5     | `create_lab_shelves_table`               | Shelves.                   |
+| 6     | `create_lab_levels_table`                | Levels.                    |
+| 7     | `create_samples_table`                   | Samples.                   |
+| 8     | `create_observations_table`              | Observation parents.       |
+| 9     | `create_bacteria_observations_table`     | Bacteria results.          |
+| 10    | `add_observation_type_to_bacteria_table` | Level/count catalog type.  |
+
+### Appendix D — Route list
+
+| Method | Path                                    | Name                    |
+| ------ | --------------------------------------- | ----------------------- |
+| GET    | `/labs`                                 | `labs.index`            |
+| GET    | `/labs/create`                          | `labs.create`           |
+| POST   | `/labs`                                 | `labs.store`            |
+| GET    | `/labs/{lab}`                           | `labs.show`             |
+| GET    | `/labs/{lab}/edit`                      | `labs.edit`             |
+| PATCH  | `/labs/{lab}`                           | `labs.update`           |
+| DELETE | `/labs/{lab}`                           | `labs.destroy`          |
+| GET    | `/labs/{lab}/samples/{sample}/bacteria` | `labs.samples.bacteria` |
+| GET    | `/organizations`                        | `organizations.index`   |
+| GET    | `/organizations/create`                 | `organizations.create`  |
+| POST   | `/organizations`                        | `organizations.store`   |
+| POST   | `/organizations/select`                 | `organizations.select`  |
+| GET    | `/organizations/{organization}/edit`    | `organizations.edit`    |
+| PATCH  | `/organizations/{organization}`         | `organizations.update`  |
+| DELETE | `/organizations/{organization}`         | `organizations.destroy` |
+
+### Appendix E — File and component inventory
+
+#### Backend
+
+| Path                                                  | Purpose                                 |
+| ----------------------------------------------------- | --------------------------------------- |
+| `app/Enums/OrganizationRole.php`                      | Role enum and permission helpers.       |
+| `app/Enums/GrowthLevel.php`                           | Growth level enum, rank, labels.        |
+| `app/Enums/BacteriaObservationType.php`               | Level/count enum.                       |
+| `app/Models/Organization.php`                         | Organization model and relations.       |
+| `app/Models/OrganizationMembership.php`               | Pivot model with role cast.             |
+| `app/Models/Lab.php`                                  | Lab model and relations.                |
+| `app/Models/LabRow.php`                               | Row model.                              |
+| `app/Models/LabShelf.php`                             | Shelf model.                            |
+| `app/Models/LabLevel.php`                             | Level model.                            |
+| `app/Models/Sample.php`                               | Sample model.                           |
+| `app/Models/Observation.php`                          | Observation model.                      |
+| `app/Models/BacteriaObservation.php`                  | Bacteria result model.                  |
+| `app/Policies/OrganizationPolicy.php`                 | Organization authorization.             |
+| `app/Policies/LabPolicy.php`                          | Lab authorization.                      |
+| `app/Http/Controllers/OrganizationController.php`     | Organization CRUD.                      |
+| `app/Http/Controllers/LabController.php`              | Lab CRUD and map.                       |
+| `app/Http/Controllers/SampleBacteriaController.php`   | Sample details JSON.                    |
+| `app/Http/Middleware/ResolveSelectedOrganization.php` | Selected-organization session context.  |
+| `app/Http/Requests/StoreOrganizationRequest.php`      | Organization create validation.         |
+| `app/Http/Requests/UpdateOrganizationRequest.php`     | Organization update validation.         |
+| `app/Http/Requests/StoreLabRequest.php`               | Lab create validation.                  |
+| `app/Http/Requests/UpdateLabRequest.php`              | Lab update validation.                  |
+| `app/Actions/CreateLab.php`                           | Transactional lab + hierarchy creation. |
+| `app/Support/LabMapQuery.php`                         | Current-state query and summaries.      |
+| `database/seeders/DemoStressSeeder.php`               | Stress seeder.                          |
+| `database/seeders/ObservationGenerator.php`           | Observation timeline generator.         |
+| `database/factories/*`                                | Factories for new models.               |
+
+#### Frontend
+
+| Path                                                  | Purpose                            |
+| ----------------------------------------------------- | ---------------------------------- |
+| `resources/js/pages/organizations/Index.vue`          | Manage Organizations page.         |
+| `resources/js/pages/organizations/Create.vue`         | Organization form.                 |
+| `resources/js/pages/organizations/Edit.vue`           | Organization edit.                 |
+| `resources/js/pages/labs/Index.vue`                   | Labs of the selected organization. |
+| `resources/js/pages/labs/Create.vue`                  | Lab creation form.                 |
+| `resources/js/pages/labs/Show.vue`                    | Lab map.                           |
+| `resources/js/pages/labs/Edit.vue`                    | Lab edit.                          |
+| `resources/js/components/organizations/*`             | Organization cards, dialogs.       |
+| `resources/js/components/OrganizationSwitcher.vue`    | Sidebar organization switcher.     |
+| `resources/js/components/labs/LabMap.vue`             | Full map container.                |
+| `resources/js/components/labs/LabMapRow.vue`          | Row section.                       |
+| `resources/js/components/labs/LabMapShelf.vue`        | Shelf card.                        |
+| `resources/js/components/labs/SampleCell.vue`         | Sample summary cell.               |
+| `resources/js/components/labs/SampleDetailsSheet.vue` | Lazy details drawer.               |
+| `resources/js/components/labs/WeekSelector.vue`       | Week selector.                     |
+| `resources/js/components/labs/MapLegend.vue`          | Legend.                            |
+| `resources/js/types/organization.ts`                  | Organization types.                |
+| `resources/js/types/lab.ts`                           | Lab and map types.                 |
+
+### Appendix F — Risks and mitigations
+
+| Risk                                                              | Impact                                | Mitigation                                                                                                                  |
+| ----------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Map query is slow at millions of rows.                            | Poor UX.                              | Indexes, `DISTINCT ON`, summary-only payload; fallback to a `current_bacteria_states` table if measured p95 exceeds target. |
+| Cascade delete of a large lab is slow.                            | Request timeout.                      | Accept for demo; document; move to a queued deletion job later.                                                             |
+| Stress seeder exceeds time or memory target.                      | Poor developer experience.            | Chunked bulk inserts, explicit IDs, sequence reset, progress output; measure and tune.                                      |
+| Test DB configuration mismatch (`phpunit.xml` vs `.env.testing`). | Tests fail or hit the wrong database. | Verify and align the test database configuration during implementation.                                                     |
+| Existing bacteria pages break from the new attribute.             | Regression.                           | Add the attribute with a default; run existing tests.                                                                       |
+| Map DOM is heavy at 3,840 cells.                                  | Slow rendering.                       | Simple cells, CSS grid, lazy details, no heavy icons per cell unless single bacterium.                                      |
+| Week selector range grows unbounded for old labs.                 | Long selector.                        | Seeded labs are 20–26 weeks old; for real labs, consider a range cap later.                                                 |
+| Timezone/DST edge cases.                                          | Wrong week assignment.                | Unit tests at year and DST boundaries; store explicit week columns.                                                         |
+| Ambiguity between "not tested" and "absent".                      | Misleading map.                       | `none`/`0` are transition-only; no row means never positive/not tested; both are hidden. Documented.                        |
+| Membership UI absent.                                             | Hard to add users outside seeding.    | Accepted for this increment; seeder assigns memberships; add UI later.                                                      |
+| Session-selected organization is shared by every tab.             | Switching in one tab changes another. | Accepted; switching redirects to Labs and the selection is revalidated on every request.                                    |
+| Bookmarks to `/dashboard` break.                                  | Confusing 404 for existing users.     | Dashboard removal is intentional; sign-in redirects to Labs and the README documents the page list.                         |
+| A user has no organization memberships.                           | Labs page has nothing to show.        | The Labs page renders an empty state with a link to Manage Organizations, where the user can create one.                    |
+
+### Appendix G — Open issues
+
+| ID     | Issue                                                                                            | Status                                                                                                                                                                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OI-001 | Exact visual palette for growth levels.                                                          | Resolved: HIGH red, MEDIUM amber, LOW emerald, count sky; every cell keeps a text label.                                                                                                                                                                                                    |
+| OI-002 | Whether to add a `current_bacteria_states` table if the map query misses its performance target. | Not needed yet: at 720 samples the map request measures ~1.0 s (140 KB payload); the largest seeded lab (1,280 levels, 3,840 samples) measures ~4.8 s median and 5.6 s max (746 KB payload), inside NFR-PERF-007's 6 s target. Revisit the table if the large lab must meet the 2 s target. |
+| OI-003 | Membership invitation/management UI.                                                             | Deferred.                                                                                                                                                                                                                                                                                   |
+| OI-004 | Manual observation creation UI.                                                                  | Deferred.                                                                                                                                                                                                                                                                                   |
+| OI-005 | Sample CRUD UI.                                                                                  | Deferred.                                                                                                                                                                                                                                                                                   |
+| OI-006 | ClickHouse mirroring and ingestion.                                                              | Deferred.                                                                                                                                                                                                                                                                                   |
+| OI-007 | Non-uniform lab layout UI.                                                                       | Deferred; schema supports it.                                                                                                                                                                                                                                                               |
+| OI-008 | Production deployment and seeder safeguards.                                                     | Deferred.                                                                                                                                                                                                                                                                                   |
+| OI-009 | Per-tab organization selection.                                                                  | Deferred; the selection is stored per user session, so tabs share it.                                                                                                                                                                                                                       |
+
+### Appendix H — Approval
+
+| Role             | Name | Signature | Date |
+| ---------------- | ---- | --------- | ---- |
+| Product owner    |      |           |      |
+| Engineering lead |      |           |      |
+| QA lead          |      |           |      |
+
+---
+
+_End of SRS-OBS-001._

@@ -62,6 +62,31 @@ php artisan test --filter=ClickHouseConnectionTest
 The integration test hits a real ClickHouse server and is skipped with a message when the
 service is unreachable. CI starts ClickHouse, Postgres and Redis as service containers.
 
+## Observations
+
+The observations module adds organizations, labs, a fixed row/shelf/level hierarchy, samples, and weekly bacteria observations. The full ISO/IEC/IEEE 29148 requirements specification is in [`docs/observations/iso-29148-srs.md`](docs/observations/iso-29148-srs.md).
+
+### Demo data
+
+`DemoStressSeeder` is explicit and destructive to demo organizations, labs, samples, and observations. It preserves users and the bacteria catalog.
+
+```bash
+php artisan db:seed --class=DemoStressSeeder
+```
+
+It creates 3 organizations in different timezones, 9 labs of three sizes (5×6×8, 8×8×10, and 8×10×16 rows × shelves × levels, giving 240, 640, and 1,280 sample places), 19,440 samples, roughly 800,000 observations, and about 1.9 million bacteria observations. On a local lerd install the seed takes about 8 minutes and peaks around 43 MB of memory. The seeder is deterministic and can be re-run. It attaches the existing user and two demo users (`demo.admin@example.com`, `demo.member@example.com`) to each organization with owner, admin, and member roles; the demo users use the password `password`.
+
+### Pages
+
+- `/labs` — labs of the organization selected in the sidebar switcher.
+- `/labs/{lab}` — the lab map with a week selector and per-sample bacteria summaries.
+- `/organizations` — Manage Organizations: create, edit, and delete organizations.
+- `/bacteria` — the bacteria atlas.
+
+The selected organization lives in the server session, so lab URLs never contain an organization id. There is no dashboard page; sign-in and email verification land on `/labs`.
+
+Observations are seeded only in this increment; manual observation creation is deferred.
+
 ## Setup
 
 ```bash
