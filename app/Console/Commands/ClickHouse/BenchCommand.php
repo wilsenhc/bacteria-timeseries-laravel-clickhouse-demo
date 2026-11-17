@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Console\Commands\ClickHouse;
 
 use App\Data\LabMap\LabMapHierarchy;
 use App\Models\ClickHouse\LabFilter;
@@ -21,9 +21,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
-#[Signature('ch:bench {--lab= : Lab id; defaults to the largest lab} {--week= : ISO week, for example 2026-W47} {--iterations=5} {--scale=1 : 1 for the loaded data, 5 for synthetic per-lab 5x tables}')]
+#[Signature('clickhouse:bench {--lab= : Lab id; defaults to the largest lab} {--week= : ISO week, for example 2026-W47} {--iterations=5} {--scale=1 : 1 for the loaded data, 5 for synthetic per-lab 5x tables}')]
 #[Description('Benchmark the PostgreSQL and ClickHouse lab map engines')]
-class BenchmarkLabMapCommand extends Command
+class BenchCommand extends Command
 {
     public function handle(LabMapService $map): int
     {

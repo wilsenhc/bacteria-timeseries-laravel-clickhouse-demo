@@ -281,6 +281,6 @@ test('clickhouse engines report an unloaded replica', function () {
             ->where('engine', 'clickhouse_snapshot')
             ->where(
                 'engineError',
-                'The ClickHouse snapshot lab map is unavailable. Run php artisan ch:load to load the ClickHouse dataset.',
+                'The ClickHouse snapshot lab map is unavailable. Run php artisan clickhouse:load to load the ClickHouse dataset.',
             ));
 });

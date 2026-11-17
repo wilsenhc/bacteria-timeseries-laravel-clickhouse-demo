@@ -24,7 +24,7 @@ The demo earns its comparison by shipping the domain with it: a multi-tenant lab
 
 - Local development runs on lerd (default) or Docker with Laravel Sail. Postgres is the application database; ClickHouse is a secondary connection used through `DB::connection('clickhouse')` and is never the default.
 - `DemoStressSeeder` creates 3 organizations across timezones, 9 labs (1,200, 3,200, and 6,400 sample places), 97,200 samples, and, in the normal seed, roughly 4.4M observations with about 10.6M bacteria observations. `--scale=10` produces 43,647,057 observations and 100,819,998 bacteria observations; the full-scale seed takes about 7.7 hours. Both are deterministic and re-runnable.
-- `php artisan ch:load` rebuilds the denormalized ClickHouse replica and weekly snapshot; `php artisan ch:bench` measures engines, with `--scale=5` for synthetic per-lab scaling.
+- `php artisan clickhouse:load` rebuilds the denormalized ClickHouse replica and weekly snapshot; `php artisan clickhouse:bench` measures engines, with `--scale=5` for synthetic per-lab scaling.
 - Demo accounts (`demo.admin@example.com`, `demo.member@example.com`, password `password`) are attached to each organization with owner, admin, and member roles.
 - The selected organization lives in the server session, so lab URLs never carry an organization id. There is no dashboard page; sign-in and email verification land on `/labs`.
 - Integration tests hit a real ClickHouse server and skip with a message when it is unreachable; CI supplies ClickHouse, Postgres, and Redis as service containers.
@@ -38,7 +38,7 @@ The demo earns its comparison by shipping the domain with it: a multi-tenant lab
 - Lab structure is fixed at `rows × shelves_per_row × levels_per_shelf`. Samples are pinned to one level, and weekly state is the latest observation at or before the selected ISO week, carried forward from earlier weeks.
 - Bacteria results are either a qualitative growth level (`high`/`medium`/`low`/`none`) or a non-negative count; a `none`/`0` terminates a cycle.
 - Deliberately out of scope: manual observation creation/edit/delete UI, sample CRUD UI, membership invitation UI, dashboards beyond the lab map, batch readings, native mobile apps, guest access to organization/lab data, soft deletes, non-uniform lab layouts through the UI, and the withdrawn AggregatingMergeTree weekly rollup.
-- ClickHouse writes are limited to the lab map replica; the snapshot is rebuilt by `ch:load`, not updated incrementally.
+- ClickHouse writes are limited to the lab map replica; the snapshot is rebuilt by `clickhouse:load`, not updated incrementally.
 
 ## Brand Commitments
 

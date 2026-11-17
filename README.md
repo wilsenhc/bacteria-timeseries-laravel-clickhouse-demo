@@ -35,7 +35,7 @@ databases:
 ```bash
 lerd link
 lerd db:create --service clickhouse
-php artisan ch:health
+php artisan clickhouse:health
 ```
 
 The command prints the server version, host, database and round-trip time, and exits non-zero
@@ -66,12 +66,12 @@ PostgreSQL migrations; each ClickHouse migration declares the `clickhouse` conne
 ```bash
 php artisan migrate
 php artisan demo:seed
-php artisan ch:load
+php artisan clickhouse:load
 ```
 
 `php artisan migrate` runs both schemas, so ClickHouse must be running when you migrate. The
 ClickHouse migrations recreate their tables if they already exist from the old loader, so the
-first `migrate` is also the adoption path. `ch:load` then checks the schema, truncates the
+first `migrate` is also the adoption path. `clickhouse:load` then checks the schema, truncates the
 replica tables, and reloads them from PostgreSQL using ClickHouse's `postgresql()` table
 function and one `INSERT ... SELECT` per week for the snapshot. ClickHouse remains optional
 at runtime, but its migrations require the service when migrating. The tables have read
@@ -87,8 +87,8 @@ applies the index migration.
 Benchmark the engines (and optionally a synthetic 5x per-lab dataset):
 
 ```bash
-php artisan ch:bench --iterations=5
-php artisan ch:bench --scale=5 --iterations=5
+php artisan clickhouse:bench --iterations=5
+php artisan clickhouse:bench --scale=5 --iterations=5
 ```
 
 The schema, the ClickHouse features used, the query, the snapshot, the benchmark, and the
@@ -98,7 +98,7 @@ measured comparison are in
 The lab map is rendered in one Inertia request: the page returns rows, shelves, levels, sample
 ids/codes, and the selected week's per-sample summaries as arrays. The three engines sit behind
 `LabMapService`; the modal's bacterium and filter details load through the `sampleDetails`
-optional prop with a POST body. There is no custom `fetch`/AJAX endpoint. `ch:bench` uses
+optional prop with a POST body. There is no custom `fetch`/AJAX endpoint. `clickhouse:bench` uses
 migration-created ClickHouse bench tables and only truncates and fills them.
 
 ### Tests
@@ -140,7 +140,7 @@ To test the raw-query limit, scale the readings per sample per week:
 
 ```bash
 php artisan demo:seed --scale=10
-php artisan ch:load
+php artisan clickhouse:load
 ```
 
 This keeps the same 97,200 samples and 26-week window but generates 20–40 readings per sample
@@ -153,7 +153,7 @@ snapshot page takes ~0.75 s.
 
 The seeder commits the hierarchy once per lab and observation batches in 1,000-observation
 chunks, so a 10x run does not hold one giant transaction. ClickHouse is not touched until
-`ch:load` at the end.
+`clickhouse:load` at the end.
 
 ### Pages
 
@@ -170,5 +170,5 @@ Observations are seeded only in this increment; manual observation creation is d
 
 ```bash
 composer setup
-php artisan ch:health
+php artisan clickhouse:health
 ```

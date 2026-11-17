@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Console\Commands\Demo;
 
 use Database\Seeders\DemoStressSeeder;
 use Illuminate\Console\Attributes\Description;
@@ -9,7 +9,7 @@ use Illuminate\Console\Command;
 
 #[Signature('demo:seed {--scale=1 : Observation reading multiplier}')]
 #[Description('Seed the demo stress dataset, optionally with scaled observation readings')]
-class SeedDemoStressCommand extends Command
+class SeedCommand extends Command
 {
     public function handle(): int
     {

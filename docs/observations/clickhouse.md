@@ -51,7 +51,7 @@ Schema::connection('clickhouse')->create('lab_observations', function (ClickHous
 Run them with `php artisan migrate`; this runs the PostgreSQL and ClickHouse
 migrations together, so ClickHouse must be running when you migrate. The
 ClickHouse migrations recreate their tables if they already exist from the old
-loader, which makes the first `migrate` the adoption path. `php artisan ch:load`
+loader, which makes the first `migrate` the adoption path. `php artisan clickhouse:load`
 then checks the schema, truncates the replica tables, and reloads. The four
 tables have
 Eloquent models in `App\Models\ClickHouse` extending
@@ -110,15 +110,15 @@ UTC; `DateTime64(6)` therefore stores UTC wall-clock values.
 | `argMax(value, version)`                        | Raw current-state query and snapshot build | Latest value by timestamp, replacing PostgreSQL's per-bacterium lookup.     |
 | `countIf`, `maxIf`, `anyIf`                     | Per-sample summary                         | Conditional aggregates build the map row inside ClickHouse.                 |
 | `PREWHERE`                                      | Raw query and snapshot build               | Reads the `lab_id` filter column first.                                     |
-| `postgresql()` table function                   | `php artisan ch:load`                      | Copies and enriches the Postgres data without export files.                 |
+| `postgresql()` table function                   | `php artisan clickhouse:load`                      | Copies and enriches the Postgres data without export files.                 |
 | Plain `MergeTree` snapshot                      | `lab_weekly_summaries`                     | Stores the final map payload per sample/week for a direct lookup.           |
-| `system.parts`                                  | `ch:load` output and experiments           | Shows compressed size and parts.                                            |
+| `system.parts`                                  | `clickhouse:load` output and experiments           | Shows compressed size and parts.                                            |
 | `EXPLAIN indexes = 1`, `system.query_log`       | Manual experiments                         | Shows index pruning and real read/timing data.                              |
 
 ## Loading the data
 
 ```bash
-php artisan ch:load
+php artisan clickhouse:load
 ```
 
 The command checks that the four ClickHouse tables exist (run
@@ -182,7 +182,7 @@ readings per sample per week: 4,434,752 observations, 10,606,888 bacteria
 observations, 1,540,144 summary rows, a 24.5 s load (12.5 s snapshot), 102.83
 MiB raw and 21.62 MiB summary. The 10x profile generates 20–40 readings per
 sample per week, producing 43.6M observations and 100.8M bacteria observations
-(PostgreSQL 20 GB). The seed takes about 7.7 hours; run `ch:load` afterward. The
+(PostgreSQL 20 GB). The seed takes about 7.7 hours; run `clickhouse:load` afterward. The
 100M rows are across the whole replica, so the largest lab has ~20M raw rows and
 a per-lab query scans that lab's rows only.
 
@@ -190,7 +190,7 @@ Rebuild PostgreSQL first, then ClickHouse:
 
 ```bash
 php artisan db:seed --class=DemoStressSeeder
-php artisan ch:load
+php artisan clickhouse:load
 ```
 
 ## The simple ClickHouse query
@@ -321,7 +321,7 @@ WHERE lab_id = ? AND week_start = toDate(?)
 ```
 
 No `GROUP BY`, no `argMax`, no state merge. The snapshot table is rebuilt by
-`ch:load`; it is not updated incrementally. The build runs two inserts per week:
+`clickhouse:load`; it is not updated incrementally. The build runs two inserts per week:
 the bacteria-present rows left joined to the filter state, then the filter-only
 samples missing from that week's rows. The week loop starts at the earliest of
 the first observation week and the first filter placement week, so filters placed
@@ -341,11 +341,11 @@ raw columnar scan is already narrow.
 ## Benchmark
 
 ```bash
-php artisan ch:bench --iterations=5
-php artisan ch:bench --scale=5 --iterations=5
+php artisan clickhouse:bench --iterations=5
+php artisan clickhouse:bench --scale=5 --iterations=5
 ```
 
-`ch:bench` measures the engines for the largest lab. `--scale=5` uses the
+`clickhouse:bench` measures the engines for the largest lab. `--scale=5` uses the
 migration-created bench tables (five copies with shifted sample ids) for the two
 ClickHouse engines; it truncates and fills them and does not re-seed PostgreSQL.
 
@@ -423,7 +423,7 @@ reading is independent and does not carry over.
   reading this week." The section is absent before the placement week.
 - The map legend has a yellow Filter entry.
 - There is no placement UI; `FilterSeeder` rebuilds placements and readings, and
-  `ch:load` replicates them to ClickHouse.
+  `clickhouse:load` replicates them to ClickHouse.
 
 ## The UI switch
 
@@ -472,7 +472,7 @@ state-query time for the current lab and week.
     ```
 
 4. **Refresh snapshots incrementally.** A scheduled build or refreshable
-   materialized view would keep the snapshot current without a full `ch:load`.
+   materialized view would keep the snapshot current without a full `clickhouse:load`.
 
 5. **Try a plain weekly table instead of states.** A `ReplacingMergeTree` with
    plain weekly values and `argMax` reads fewer rows than raw without the wider
@@ -485,11 +485,11 @@ state-query time for the current lab and week.
 ## Limitations
 
 - The ClickHouse tables are replicas. Run `php artisan migrate` for schema and
-  `php artisan ch:load` to truncate and reload. There is no incremental sync.
+  `php artisan clickhouse:load` to truncate and reload. There is no incremental sync.
 - The ClickHouse migrations drop and recreate their tables; running `migrate`
   against loader-created tables is the adoption path.
 - PostgreSQL stays the source of truth; writes still go to PostgreSQL only.
-- The `ch:bench --scale=5` benchmark is synthetic per-lab duplication; the
+- The `clickhouse:bench --scale=5` benchmark is synthetic per-lab duplication; the
   loaded 10x stress profile is a separate full dataset.
 - The engine choice is per session, so all tabs share it.
 - The `postgresql()` load needs the Postgres host to be resolvable from the

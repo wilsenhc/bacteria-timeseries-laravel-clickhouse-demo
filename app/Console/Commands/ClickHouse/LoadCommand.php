@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Console\Commands\ClickHouse;
 
 use App\Models\ClickHouse\LabFilter;
 use App\Models\ClickHouse\LabFilterObservation;
@@ -18,9 +18,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
-#[Signature('ch:load')]
+#[Signature('clickhouse:load')]
 #[Description('Load the lab observation dataset into ClickHouse from PostgreSQL')]
-class LoadLabObservationsCommand extends Command
+class LoadCommand extends Command
 {
     public function handle(WeeklySnapshot $snapshot): int
     {

@@ -121,7 +121,7 @@ class BuildLabMapPage
     {
         return $engine === LabMapEngine::Postgres
             ? (string) __('The :engine lab map is unavailable.', ['engine' => $engine->label()])
-            : (string) __('The :engine lab map is unavailable. Run php artisan ch:load to load the ClickHouse dataset.', ['engine' => $engine->label()]);
+            : (string) __('The :engine lab map is unavailable. Run php artisan clickhouse:load to load the ClickHouse dataset.', ['engine' => $engine->label()]);
     }
 
     /**

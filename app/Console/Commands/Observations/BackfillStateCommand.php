@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Console\Commands\Observations;
 
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\DB;
 
 #[Signature('observations:backfill-state {--chunk=500000 : Rows per update batch}')]
 #[Description('Backfill sample_id and observed_at on bacteria observations')]
-class BackfillBacteriaObservationStateCommand extends Command
+class BackfillStateCommand extends Command
 {
     public function handle(): int
     {

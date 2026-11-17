@@ -11,7 +11,7 @@ use App\Services\LabMap\Concerns\BuildsFilterStateSql;
 /**
  * The ClickHouse statements that precompute one week of lab-map summaries.
  *
- * Shared by `ch:load` and the equivalence tests, so the snapshot the app reads
+ * Shared by `clickhouse:load` and the equivalence tests, so the snapshot the app reads
  * is always built by the SQL the tests compare against the other engines.
  */
 final class WeeklySnapshot

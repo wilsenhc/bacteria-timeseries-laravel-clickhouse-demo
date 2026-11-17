@@ -12,7 +12,7 @@ beforeEach(function () {
 });
 
 it('reports a healthy ClickHouse connection', function () {
-    $this->artisan('ch:health')
+    $this->artisan('clickhouse:health')
         ->assertSuccessful()
         ->expectsOutputToContain(config('database.connections.clickhouse.database'));
 });
