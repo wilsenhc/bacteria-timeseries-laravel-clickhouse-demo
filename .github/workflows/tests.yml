@@ -89,5 +89,10 @@ jobs:
       - name: Setup Application
         run: composer setup
 
+      - name: Create ClickHouse testing database
+        run: >-
+          curl -fsS -u lerd:lerd
+          "http://127.0.0.1:8123/?query=CREATE+DATABASE+IF+NOT+EXISTS+bacteria_timeseries_laravel_example_testing"
+
       - name: Run CI Checks
         run: composer ci:check
