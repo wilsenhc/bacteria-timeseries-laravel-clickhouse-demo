@@ -53,14 +53,6 @@ class Lab extends Model
         return $this->hasMany(Sample::class);
     }
 
-    /**
-     * @return HasMany<Filter, $this>
-     */
-    public function filters(): HasMany
-    {
-        return $this->hasMany(Filter::class);
-    }
-
     public function levelsCount(): int
     {
         return $this->row_count * $this->shelves_per_row * $this->levels_per_shelf;

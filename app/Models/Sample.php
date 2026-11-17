@@ -8,7 +8,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 
 /**
@@ -47,13 +46,5 @@ class Sample extends Model
     public function observations(): HasMany
     {
         return $this->hasMany(Observation::class);
-    }
-
-    /**
-     * @return HasOne<Filter, $this>
-     */
-    public function filter(): HasOne
-    {
-        return $this->hasOne(Filter::class);
     }
 }

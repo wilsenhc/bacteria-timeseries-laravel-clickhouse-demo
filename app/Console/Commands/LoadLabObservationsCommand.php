@@ -7,6 +7,7 @@ use App\Models\ClickHouse\LabFilterObservation;
 use App\Models\ClickHouse\LabObservation;
 use App\Models\ClickHouse\LabWeeklySummary;
 use App\Models\Lab;
+use App\Services\LabMap\Replica\WeeklySnapshot;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Console\Attributes\Description;
@@ -21,20 +22,34 @@ use Throwable;
 #[Description('Load the lab observation dataset into ClickHouse from PostgreSQL')]
 class LoadLabObservationsCommand extends Command
 {
-    public function handle(): int
+    public function handle(WeeklySnapshot $snapshot): int
     {
         $postgres = config('database.connections.pgsql');
         $password = (string) $postgres['password'];
 
         config(['database.connections.clickhouse.timeout' => 300]);
 
-        try {
-            $clickhouse = DB::connection('clickhouse');
-            $clickhouse->select('SELECT 1');
-        } catch (Throwable $exception) {
-            $this->components->error('ClickHouse is unreachable: '.$this->redact($exception->getMessage(), $password));
+        $clickhouse = DB::connection('clickhouse');
+        $attempts = 60;
 
-            return self::FAILURE;
+        for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+            try {
+                $clickhouse->select('SELECT 1');
+
+                break;
+            } catch (Throwable $exception) {
+                if ($attempt === $attempts) {
+                    $this->components->error('ClickHouse is unreachable: '.$this->redact($exception->getMessage(), $password));
+
+                    return self::FAILURE;
+                }
+
+                if ($attempt === 1) {
+                    $this->components->info('Waiting for ClickHouse to accept connections...');
+                }
+
+                sleep(1);
+            }
         }
 
         $postgresTable = fn (string $table): string => sprintf(
@@ -126,18 +141,11 @@ class LoadLabObservationsCommand extends Command
                 ) {
                     $weekDate = $week->toDateString();
 
-                    $clickhouse->statement($this->snapshotSql(), [
-                        $weekDate,
-                        $weekDate,
-                        $weekDate,
-                        $weekDate,
-                    ]);
-                    $clickhouse->statement($this->snapshotFilterOnlySql(), [
-                        $weekDate,
-                        $weekDate,
-                        $weekDate,
-                        $weekDate,
-                    ]);
+                    [$sql, $bindings] = $snapshot->summariesStatement($weekDate);
+                    $clickhouse->statement($sql, $bindings);
+
+                    [$sql, $bindings] = $snapshot->filterOnlyStatement($weekDate);
+                    $clickhouse->statement($sql, $bindings);
                 }
             }
         } catch (Throwable $exception) {
@@ -194,6 +202,7 @@ FROM %s AS bo
 INNER JOIN %s AS o ON o.id = bo.observation_id
 INNER JOIN %s AS s ON s.id = o.sample_id
 INNER JOIN %s AS b ON b.id = bo.bacteria_id
+SETTINGS join_algorithm = 'grace_hash', max_bytes_in_join = 1073741824
 SQL, LabObservation::TABLE, ...array_values($postgresTables));
     }
 
@@ -229,108 +238,6 @@ SELECT
 FROM %s AS fo
 INNER JOIN %s AS f ON f.id = fo.filter_id
 SQL, LabFilterObservation::TABLE, $postgresFilterObservations, $postgresFilters);
-    }
-
-    private function snapshotSql(): string
-    {
-        return sprintf(<<<'SQL'
-INSERT INTO %s
-SELECT
-    b.lab_id,
-    toDate(?) AS week_start,
-    b.sample_id,
-    b.present_count,
-    b.level_count,
-    b.count_count,
-    b.highest_level,
-    b.max_count,
-    b.single_id,
-    b.single_observation_type,
-    b.single_growth_level,
-    b.single_count,
-    f.filter_id,
-    f.filter_value
-FROM (
-    SELECT
-        lab_id,
-        sample_id,
-        countIf(present) AS present_count,
-        countIf(present AND observation_type = 'level') AS level_count,
-        countIf(present AND observation_type = 'count') AS count_count,
-        maxIf(growth_level, present AND observation_type = 'level') AS highest_level,
-        maxIf(`count`, present AND observation_type = 'count') AS max_count,
-        anyIf(bacteria_id, present) AS single_id,
-        anyIf(observation_type, present) AS single_observation_type,
-        anyIf(growth_level, present) AS single_growth_level,
-        anyIf(`count`, present) AS single_count
-    FROM (
-        SELECT
-            lab_id,
-            sample_id,
-            bacteria_id,
-            argMax(growth_level, observed_at) AS growth_level,
-            argMax(`count`, observed_at) AS `count`,
-            argMax(observation_type, observed_at) AS observation_type,
-            if(observation_type = 'count', `count` > 0, growth_level IN ('low', 'medium', 'high')) AS present
-        FROM %s
-        WHERE week_start <= toDate(?)
-        GROUP BY lab_id, sample_id, bacteria_id
-    )
-    GROUP BY lab_id, sample_id
-    HAVING present_count > 0
-) AS b
-LEFT JOIN (
-%s
-) AS f ON f.lab_id = b.lab_id AND f.sample_id = b.sample_id
-SQL, LabWeeklySummary::TABLE, LabObservation::TABLE, $this->filterStateSql());
-    }
-
-    private function snapshotFilterOnlySql(): string
-    {
-        return sprintf(<<<'SQL'
-INSERT INTO %s
-SELECT
-    f.lab_id,
-    toDate(?) AS week_start,
-    f.sample_id,
-    0 AS present_count,
-    0 AS level_count,
-    0 AS count_count,
-    'none' AS highest_level,
-    -1 AS max_count,
-    0 AS single_id,
-    '' AS single_observation_type,
-    'none' AS single_growth_level,
-    -1 AS single_count,
-    f.filter_id,
-    f.filter_value
-FROM (
-%s
-) AS f
-LEFT JOIN (
-    SELECT lab_id, sample_id
-    FROM %s
-    WHERE week_start = toDate(?)
-    GROUP BY lab_id, sample_id
-) AS existing ON existing.lab_id = f.lab_id AND existing.sample_id = f.sample_id
-WHERE existing.sample_id = 0
-SQL, LabWeeklySummary::TABLE, $this->filterStateSql(), LabWeeklySummary::TABLE);
-    }
-
-    private function filterStateSql(): string
-    {
-        return sprintf(<<<'SQL'
-SELECT
-    f.lab_id,
-    f.sample_id,
-    f.filter_id,
-    if(max(fo.observed_at) = toDateTime64(0, 6, 'UTC'), -1, argMax(fo.value, fo.observed_at)) AS filter_value
-FROM %s AS f
-LEFT JOIN %s AS fo
-    ON fo.filter_id = f.filter_id AND fo.week_start = toDate(?)
-WHERE f.placed_week <= toDate(?)
-GROUP BY f.lab_id, f.sample_id, f.filter_id
-SQL, LabFilter::TABLE, LabFilterObservation::TABLE);
     }
 
     /**

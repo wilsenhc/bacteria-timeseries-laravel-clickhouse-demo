@@ -8,23 +8,24 @@ import {
     SelectTrigger,
 } from '@/components/ui/select';
 import { engine as engineRoute } from '@/routes/labs';
-import type { LabMapEngine, LabMapTiming } from '@/types/lab';
+import type {
+    LabMapEngine,
+    LabMapEngineOption,
+    LabMapTiming,
+} from '@/types/lab';
 
 const props = defineProps<{
     engine: LabMapEngine;
     labId: number;
     week: string;
     timings: Record<string, LabMapTiming>;
+    options: LabMapEngineOption[];
 }>();
 
-const options: { value: LabMapEngine; label: string }[] = [
-    { value: 'pgsql', label: 'PostgreSQL' },
-    { value: 'clickhouse', label: 'ClickHouse' },
-    { value: 'clickhouse_snapshot', label: 'ClickHouse snapshot' },
-];
-
 const activeOption = computed(
-    () => options.find((option) => option.value === props.engine) ?? options[0],
+    () =>
+        props.options.find((option) => option.value === props.engine) ??
+        props.options[0],
 );
 
 const timing = (value: LabMapEngine): string | null => {
@@ -38,9 +39,14 @@ const timing = (value: LabMapEngine): string | null => {
         return null;
     }
 
-    return entry.ms >= 1000
-        ? `${(entry.ms / 1000).toFixed(2)} s`
-        : `${Math.round(entry.ms)} ms`;
+    const label =
+        entry.ms >= 1000
+            ? `${(entry.ms / 1000).toFixed(2)} s`
+            : `${Math.round(entry.ms)} ms`;
+
+    return entry.samples > 0
+        ? `${label} · ${entry.samples.toLocaleString()} loaded`
+        : label;
 };
 
 const switchTo = (value: unknown) => {
@@ -71,7 +77,7 @@ const switchTo = (value: unknown) => {
             </SelectTrigger>
             <SelectContent>
                 <SelectItem
-                    v-for="option in options"
+                    v-for="option in props.options"
                     :key="option.value"
                     :value="option.value"
                 >

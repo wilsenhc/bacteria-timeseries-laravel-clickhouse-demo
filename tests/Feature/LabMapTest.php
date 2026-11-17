@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\BuildLabMapPage;
 use App\Enums\GrowthLevel;
 use App\Enums\OrganizationRole;
 use App\Models\Bacteria;
@@ -9,9 +10,10 @@ use App\Models\Lab;
 use App\Models\Organization;
 use App\Models\Sample;
 use App\Models\User;
-use App\Support\LabMap\PostgresLabMapEngine;
-use App\Support\LabMapQuery;
+use App\Services\LabMap\LabMapService;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Http\Request;
 use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function () {
@@ -45,11 +47,11 @@ afterEach(function () {
 
 function labMapSummary(Lab $lab, Sample $sample, string $week): array
 {
-    $map = app(LabMapQuery::class);
+    $map = app(LabMapService::class);
     $weeks = $map->weekOptions($lab);
     $selected = $map->selectedWeek($weeks, $week);
     $weekEnd = $map->weekEnd($lab, $selected);
-    $summaries = $map->summaries($lab, $weekEnd);
+    $summaries = $map->summaries($lab, $weekEnd, $map->hierarchy($lab));
 
     return $summaries[$sample->id];
 }
@@ -154,7 +156,8 @@ test('a filter appears from its placement week and does not carry over', functio
     $next = labMapSummary($this->lab, $this->sample, '2026-W46');
 
     $week47 = CarbonImmutable::parse('2026-11-22 23:59:59', 'UTC');
-    $after = app(PostgresLabMapEngine::class)->summaries($this->lab, $week47);
+    $map = app(LabMapService::class);
+    $after = $map->summaries($this->lab, $week47, $map->hierarchy($this->lab));
 
     expect($before['filter'] ?? null)->toBeNull()
         ->and($placed['present_count'])->toBe(0)
@@ -186,7 +189,7 @@ test('a filter does not change the bacteria summary', function () {
         ]);
 });
 
-test('the sample details endpoint returns the filter placement and reading', function () {
+test('the sample details partial reload returns the filter placement and reading', function () {
     $filter = Filter::factory()->forSample($this->sample)->create([
         'placed_at' => '2026-11-02 12:00:00',
     ]);
@@ -196,23 +199,27 @@ test('the sample details endpoint returns the filter placement and reading', fun
     ]);
 
     $this->actingAs($this->user)
-        ->getJson(route('labs.samples.bacteria', [
-            $this->lab,
-            $this->sample,
+        ->get(route('labs.show', [
+            'lab' => $this->lab,
             'week' => '2026-W45',
+            'sample' => $this->sample->id,
         ]))
-        ->assertOk()
-        ->assertJsonPath('filter.placed_week', '2026-W45')
-        ->assertJsonPath('filter.value', 42);
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('labs/Show')
+            ->reloadOnly('sampleDetails', fn (Assert $reload) => $reload
+                ->where('sampleDetails.filter.placedWeek', '2026-W45')
+                ->where('sampleDetails.filter.value', 42)));
 
     $this->actingAs($this->user)
-        ->getJson(route('labs.samples.bacteria', [
-            $this->lab,
-            $this->sample,
+        ->get(route('labs.show', [
+            'lab' => $this->lab,
             'week' => '2026-W44',
+            'sample' => $this->sample->id,
         ]))
-        ->assertOk()
-        ->assertJsonPath('filter', null);
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('labs/Show')
+            ->reloadOnly('sampleDetails', fn (Assert $reload) => $reload
+                ->where('sampleDetails.filter', null)));
 });
 
 test('the lab map page returns the hierarchy and current week', function () {
@@ -228,21 +235,38 @@ test('the lab map page returns the hierarchy and current week', function () {
             ->has('rows.0.shelves.0.levels', 1)
             ->has('rows.0.shelves.0.levels.0.samples', 1)
             ->missing('bacteria')
-            ->where('rows.0.shelves.0.levels.0.samples.0.summary.present_count', 0));
+            ->where('rows.0.shelves.0.levels.0.samples.0.id', $this->sample->id)
+            ->where('rows.0.shelves.0.levels.0.samples.0.summary.present_count', 0)
+            ->where('timings.pgsql.samples', 1));
 });
 
-test('the sample bacteria endpoint returns the selected week state', function () {
+test('the sample details partial reload returns the selected week state', function () {
     createObservation($this->sample, '2026-11-02 12:00:00', $this->levelBacteria, GrowthLevel::High);
 
     $this->actingAs($this->user)
-        ->getJson(route('labs.samples.bacteria', [
-            $this->lab,
-            $this->sample,
+        ->get(route('labs.show', [
+            'lab' => $this->lab,
             'week' => '2026-W45',
+            'sample' => $this->sample->id,
         ]))
-        ->assertOk()
-        ->assertJsonPath('bacteria.0.id', $this->levelBacteria->id)
-        ->assertJsonPath('bacteria.0.growth_level', 'high');
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('labs/Show')
+            ->reloadOnly('sampleDetails', fn (Assert $reload) => $reload
+                ->where('sampleDetails.bacteria.0.id', $this->levelBacteria->id)
+                ->where('sampleDetails.bacteria.0.growthLevel', 'high')));
+});
+
+test('the sample details action rejects a sample from another lab', function () {
+    $otherLab = createLabWithHierarchy($this->organization, 1, 1, 1);
+    $otherSample = createSample($otherLab, 'R1-S1-L1-02');
+    $request = Request::create(route('labs.show', [
+        'lab' => $this->lab,
+        'sample' => $otherSample->id,
+    ]));
+
+    $this->expectException(ModelNotFoundException::class);
+
+    app(BuildLabMapPage::class)->sampleDetails($request, $this->lab);
 });
 
 test('the observation iso week is computed in the organization timezone', function () {

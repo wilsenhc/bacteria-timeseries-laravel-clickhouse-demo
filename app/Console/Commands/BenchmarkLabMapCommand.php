@@ -2,21 +2,22 @@
 
 namespace App\Console\Commands;
 
+use App\Data\LabMap\LabMapHierarchy;
 use App\Models\ClickHouse\LabFilter;
 use App\Models\ClickHouse\LabFilterObservation;
 use App\Models\ClickHouse\LabObservation;
 use App\Models\ClickHouse\LabWeeklySummary;
 use App\Models\Lab;
-use App\Support\LabMap\ClickHouseLabMapEngine;
-use App\Support\LabMap\ClickHouseSnapshotLabMapEngine;
-use App\Support\LabMap\LabMapEngineContract;
-use App\Support\LabMap\PostgresLabMapEngine;
-use App\Support\LabMapQuery;
+use App\Services\LabMap\ClickHouseLabMapService;
+use App\Services\LabMap\ClickHouseSnapshotLabMapService;
+use App\Services\LabMap\LabMapService;
+use App\Services\LabMap\PostgresLabMapService;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 use Illuminate\Database\Connection;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -24,7 +25,7 @@ use Throwable;
 #[Description('Benchmark the PostgreSQL and ClickHouse lab map engines')]
 class BenchmarkLabMapCommand extends Command
 {
-    public function handle(LabMapQuery $mapQuery): int
+    public function handle(LabMapService $map): int
     {
         $iterations = max(1, (int) $this->option('iterations'));
         $scale = (int) $this->option('scale');
@@ -48,14 +49,15 @@ class BenchmarkLabMapCommand extends Command
         }
 
         $weekParam = $this->option('week');
-        $week = $mapQuery->selectedWeek($mapQuery->weekOptions($lab), is_string($weekParam) ? $weekParam : null);
-        $weekEnd = $mapQuery->weekEnd($lab, $week);
+        $week = $map->selectedWeek($map->weekOptions($lab), is_string($weekParam) ? $weekParam : null);
+        $weekEnd = $map->weekEnd($lab, $week);
+        $hierarchy = $scale === 5 ? $this->scaledHierarchy($map->hierarchy($lab)) : $map->hierarchy($lab);
 
         $this->components->info(sprintf(
             'Benchmarking %s (%d samples), week %s, scale %s, %d iteration(s).',
             $lab->name,
             $lab->samples_count,
-            $week['value'],
+            $week->value,
             $scale === 1 ? '1x' : '5x synthetic',
             $iterations,
         ));
@@ -69,7 +71,7 @@ class BenchmarkLabMapCommand extends Command
             $rows = [];
 
             foreach ($engines as $name => $engine) {
-                $rows[] = $this->measure($name, $engine, $lab, $weekEnd, $iterations, $scale);
+                $rows[] = $this->measure($name, $engine, $lab, $weekEnd, $hierarchy, $iterations, $scale);
             }
 
             $this->table(
@@ -87,9 +89,7 @@ class BenchmarkLabMapCommand extends Command
             return self::FAILURE;
         } finally {
             if ($bench !== null) {
-                foreach ([$bench['summary'], $bench['raw'], $bench['filterObservations'], $bench['filters']] as $table) {
-                    $clickhouse->statement('DROP TABLE IF EXISTS '.$table);
-                }
+                $this->truncateBenchTables($clickhouse, $bench);
             }
         }
     }
@@ -104,14 +104,7 @@ class BenchmarkLabMapCommand extends Command
         $filters = 'lab_filters_bench';
         $filterObservations = 'lab_filter_observations_bench';
 
-        foreach ([$summary, $raw, $filterObservations, $filters] as $table) {
-            $connection->statement('DROP TABLE IF EXISTS '.$table);
-        }
-
-        $connection->statement('CREATE TABLE '.$raw.' AS '.LabObservation::TABLE);
-        $connection->statement('CREATE TABLE '.$summary.' AS '.LabWeeklySummary::TABLE);
-        $connection->statement('CREATE TABLE '.$filters.' AS '.LabFilter::TABLE);
-        $connection->statement('CREATE TABLE '.$filterObservations.' AS '.LabFilterObservation::TABLE);
+        $this->truncateBenchTables($connection, compact('raw', 'summary', 'filters', 'filterObservations'));
 
         for ($copy = 0; $copy < 5; $copy++) {
             $offset = $copy * 1_000_000;
@@ -152,24 +145,49 @@ class BenchmarkLabMapCommand extends Command
     }
 
     /**
+     * @param  array{raw: string, summary: string, filters: string, filterObservations: string}  $bench
+     */
+    private function truncateBenchTables(Connection $connection, array $bench): void
+    {
+        foreach ([$bench['summary'], $bench['raw'], $bench['filterObservations'], $bench['filters']] as $table) {
+            $connection->statement('TRUNCATE TABLE '.$table);
+        }
+    }
+
+    private function scaledHierarchy(LabMapHierarchy $hierarchy): LabMapHierarchy
+    {
+        $sampleIds = [];
+
+        for ($copy = 0; $copy < 5; $copy++) {
+            $offset = $copy * 1_000_000;
+
+            foreach ($hierarchy->sampleIds as $sampleId) {
+                $sampleIds[] = $sampleId + $offset;
+            }
+        }
+
+        return new LabMapHierarchy(new Collection, $sampleIds);
+    }
+
+    /**
      * @param  array{raw: string, summary: string, filters: string, filterObservations: string}|null  $bench
-     * @return array<string, LabMapEngineContract>
+     * @return array<string, LabMapService>
      */
     private function engines(int $scale, ?array $bench): array
     {
         if ($scale === 1) {
             return [
-                'PostgreSQL' => app(PostgresLabMapEngine::class),
-                'ClickHouse raw' => app(ClickHouseLabMapEngine::class),
-                'ClickHouse snapshot' => app(ClickHouseSnapshotLabMapEngine::class),
+                'PostgreSQL' => app(PostgresLabMapService::class),
+                'ClickHouse raw' => app(ClickHouseLabMapService::class),
+                'ClickHouse snapshot' => app(ClickHouseSnapshotLabMapService::class),
             ];
         }
 
-        $raw = new ClickHouseLabMapEngine($bench['raw'], $bench['filters'], $bench['filterObservations']);
+        $raw = new ClickHouseLabMapService($bench['raw'], $bench['filters'], $bench['filterObservations']);
 
         return [
             'ClickHouse raw' => $raw,
-            'ClickHouse snapshot' => new ClickHouseSnapshotLabMapEngine($bench['summary'], $raw),
+            'ClickHouse snapshot' => new ClickHouseSnapshotLabMapService($raw, $bench['summary']),
         ];
     }
 
@@ -178,22 +196,23 @@ class BenchmarkLabMapCommand extends Command
      */
     private function measure(
         string $name,
-        LabMapEngineContract $engine,
+        LabMapService $engine,
         Lab $lab,
         CarbonImmutable $weekEnd,
+        LabMapHierarchy $hierarchy,
         int $iterations,
         int $scale,
     ): array {
         try {
-            $summaries = $engine->summaries($lab, $weekEnd);
+            $summaries = $engine->summaries($lab, $weekEnd, $hierarchy);
             $times = [];
 
             for ($iteration = 0; $iteration < $iterations; $iteration++) {
                 $startedAt = hrtime(true);
-                $summaries = $engine->summaries($lab, $weekEnd);
+                $summaries = $engine->summaries($lab, $weekEnd, $hierarchy);
                 $times[] = (hrtime(true) - $startedAt) / 1_000_000;
             }
-        } catch (Throwable $exception) {
+        } catch (Throwable) {
             return [$name, $scale.'x', 'error', '-', '-', '-', '-'];
         }
 
@@ -205,11 +224,15 @@ class BenchmarkLabMapCommand extends Command
         $count = count($times);
         $median = $times[intdiv($count, 2)];
         $p95 = $times[min($count - 1, (int) ceil($count * 0.95) - 1)];
+        $present = count(array_filter(
+            $summaries,
+            fn (array $summary): bool => $summary['present_count'] > 0 || isset($summary['filter']),
+        ));
 
         return [
             $name,
             $scale.'x',
-            number_format(count($summaries)),
+            number_format($present),
             number_format(min($times), 1),
             number_format($median, 1),
             number_format($p95, 1),

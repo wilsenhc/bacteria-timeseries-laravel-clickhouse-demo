@@ -2,10 +2,12 @@ import type { GrowthLevel, LabMapSample, SampleSummary } from '@/types/lab';
 
 export type LevelState = 'high' | 'medium' | 'low' | 'count' | 'empty';
 
-const rank: Record<'high' | 'medium' | 'low', number> = {
+export const levelStateRank: Record<LevelState, number> = {
     high: 3,
     medium: 2,
     low: 1,
+    count: 0.5,
+    empty: 0,
 };
 
 export const stateLabels: Record<LevelState, string> = {
@@ -45,7 +47,7 @@ export function levelState(samples: LabMapSample[]): LevelState {
         }
 
         if (best === 'high' || best === 'medium' || best === 'low') {
-            if (rank[state] > rank[best]) {
+            if (levelStateRank[state] > levelStateRank[best]) {
                 best = state;
             }
         } else {

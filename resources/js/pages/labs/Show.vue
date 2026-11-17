@@ -38,7 +38,10 @@ import type {
     LabMapEngine,
     LabMapLevel,
     LabMapRow as LabMapRowData,
+    LabMapEngineOption,
+    LabMapSample,
     LabMapTiming,
+    SampleDetails,
     WeekOption,
 } from '@/types/lab';
 import type { OrganizationOption } from '@/types/organization';
@@ -51,6 +54,7 @@ const props = defineProps<{
     rows: LabMapRowData[];
     canManage: boolean;
     engine: LabMapEngine;
+    engines: LabMapEngineOption[];
     timings: Record<string, LabMapTiming>;
     engineError: string | null;
 }>();
@@ -121,6 +125,9 @@ const goToWeek = (week: WeekOption | null) => {
 
 const selectedLevel = ref<LabMapLevel | null>(null);
 const modalOpen = ref(false);
+const sampleDetails = ref<SampleDetails | null>(null);
+const sampleDetailsLoading = ref(false);
+const sampleDetailsError = ref<string | null>(null);
 
 const openLevel = (level: LabMapLevel) => {
     selectedLevel.value = level;
@@ -146,6 +153,43 @@ watch(
         }
     },
 );
+
+const requestSampleDetails = (sample: LabMapSample) => {
+    if (sampleDetailsLoading.value) {
+        return;
+    }
+
+    if (
+        sampleDetails.value?.sample.id === sample.id &&
+        sampleDetailsError.value === null
+    ) {
+        return;
+    }
+
+    sampleDetailsError.value = null;
+    sampleDetailsLoading.value = true;
+
+    router.post(
+        `${show.url(props.lab.id)}?week=${encodeURIComponent(props.selectedWeek.value)}`,
+        { sample: sample.id },
+        {
+            only: ['sampleDetails'],
+            preserveScroll: true,
+            preserveState: true,
+            onSuccess: (page) => {
+                sampleDetails.value =
+                    (page.props.sampleDetails as SampleDetails | undefined) ??
+                    null;
+            },
+            onError: () => {
+                sampleDetailsError.value = 'Unable to load sample details.';
+            },
+            onFinish: () => {
+                sampleDetailsLoading.value = false;
+            },
+        },
+    );
+};
 
 const shelfCount = computed(() =>
     props.rows.reduce((count, row) => Math.max(count, row.shelves.length), 0),
@@ -227,6 +271,7 @@ const formatDate = (value: string | null) =>
                     :lab-id="lab.id"
                     :week="selectedWeek.value"
                     :timings="timings"
+                    :options="engines"
                 />
 
                 <template v-if="canManage">
@@ -305,7 +350,7 @@ const formatDate = (value: string | null) =>
                             :value="week.value"
                         >
                             {{ week.label }}
-                            <span v-if="week.is_current"> · current</span>
+                            <span v-if="week.isCurrent"> · current</span>
                         </SelectItem>
                     </SelectContent>
                 </Select>
@@ -323,7 +368,7 @@ const formatDate = (value: string | null) =>
             <div class="ml-auto flex flex-wrap items-center gap-3">
                 <p class="tech uppercase">
                     End of week · {{ selectedWeek.value }}
-                    <span v-if="selectedWeek.is_current">(in progress)</span>
+                    <span v-if="selectedWeek.isCurrent">(in progress)</span>
                 </p>
                 <MapLegend />
                 <p class="hidden text-xs text-muted-foreground lg:block">
@@ -369,10 +414,12 @@ const formatDate = (value: string | null) =>
         <LevelDetailsModal
             :open="modalOpen"
             :level="selectedLevel"
-            :lab-id="lab.id"
-            :week="selectedWeek.value"
             :week-label="selectedWeek.label"
+            :sample-details="sampleDetails"
+            :sample-details-loading="sampleDetailsLoading"
+            :sample-details-error="sampleDetailsError"
             @update:open="modalOpen = $event"
+            @request-sample-details="requestSampleDetails"
         />
     </div>
 </template>

@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use Carbon\CarbonInterface;
+use App\Support\ObservationWeek;
 use Database\Factories\FilterObservationFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -61,11 +61,7 @@ class FilterObservation extends Model
             $timezone = $observation->filter?->lab?->organization->timezone
                 ?? config('app.timezone');
 
-            $observation->week_start = $observation->observed_at
-                ->copy()
-                ->setTimezone($timezone)
-                ->startOfWeek(CarbonInterface::MONDAY)
-                ->toDateString();
+            $observation->week_start = ObservationWeek::for($observation->observed_at, $timezone)->startDate;
         });
     }
 }

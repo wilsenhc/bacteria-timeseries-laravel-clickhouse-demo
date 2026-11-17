@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\Filter;
 use App\Models\Lab;
 use App\Models\Sample;
+use App\Support\ObservationWeek;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Seeder;
@@ -91,15 +92,15 @@ class FilterSeeder extends Seeder
                 ->addMinutes(mt_rand(0, 59))
                 ->addSeconds(mt_rand(0, 59));
 
-            $local = $placedAt->setTimezone($timezone);
+            $placedWeek = ObservationWeek::for($placedAt, $timezone);
 
             $filter = Filter::create([
                 'lab_id' => $lab->id,
                 'sample_id' => $sampleId,
                 'placed_at' => $placedAt,
-                'iso_year' => $local->isoWeekYear,
-                'iso_week' => $local->isoWeek,
-                'week_start' => $local->startOfWeek(CarbonInterface::MONDAY)->toDateString(),
+                'iso_year' => $placedWeek->isoYear,
+                'iso_week' => $placedWeek->isoWeek,
+                'week_start' => $placedWeek->startDate,
             ]);
 
             $filterCount++;
@@ -123,7 +124,7 @@ class FilterSeeder extends Seeder
                 $readingRows[] = [
                     'filter_id' => $filter->id,
                     'observed_at' => $observedAt->utc()->toDateTimeString(),
-                    'week_start' => $week->toDateString(),
+                    'week_start' => ObservationWeek::for($week, $timezone)->startDate,
                     'value' => mt_rand(self::MIN_VALUE, self::MAX_VALUE),
                     'created_at' => $now,
                     'updated_at' => $now,

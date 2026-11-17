@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue';
 import BacteriaIcon from '@/components/BacteriaIcon.vue';
 import FilterBadge from '@/components/labs/FilterBadge.vue';
 import LevelMark from '@/components/labs/LevelMark.vue';
-import { sampleState, stateLabels, type LevelState } from '@/lib/lab-map-state';
+import { levelStateRank, sampleState, stateLabels } from '@/lib/lab-map-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,24 +15,20 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { bacteria } from '@/routes/labs/samples';
-import type {
-    BacteriaObservation,
-    LabMapLevel,
-    LabMapSample,
-    SampleFilterDetails,
-} from '@/types/lab';
+import type { LabMapLevel, LabMapSample, SampleDetails } from '@/types/lab';
 
 const props = defineProps<{
     open: boolean;
     level: LabMapLevel | null;
-    labId: number;
-    week: string;
     weekLabel: string;
+    sampleDetails: SampleDetails | null;
+    sampleDetailsLoading: boolean;
+    sampleDetailsError: string | null;
 }>();
 
 const emit = defineEmits<{
     'update:open': [value: boolean];
+    'request-sample-details': [sample: LabMapSample];
 }>();
 
 const open = computed({
@@ -47,14 +43,6 @@ const levelCode = computed(
         samples.value[0]?.code.replace(/-\d{2}$/, '') ??
         (props.level ? `Level ${props.level.number}` : 'Level'),
 );
-
-const rank: Record<LevelState, number> = {
-    high: 3,
-    medium: 2,
-    low: 1,
-    count: 0.5,
-    empty: 0,
-};
 
 const selectedSample = ref<LabMapSample | null>(null);
 const title = ref<{ $el?: HTMLElement } | null>(null);
@@ -76,66 +64,32 @@ watch(
         selectedSample.value =
             [...level.samples].sort(
                 (a, b) =>
-                    rank[sampleState(b.summary)] - rank[sampleState(a.summary)],
+                    levelStateRank[sampleState(b.summary)] -
+                    levelStateRank[sampleState(a.summary)],
             )[0] ?? null;
     },
     { immediate: true },
 );
 
-const loading = ref(false);
-const error = ref<string | null>(null);
-const items = ref<BacteriaObservation[]>([]);
-const filter = ref<SampleFilterDetails | null>(null);
-
-const requestKey = computed(() =>
-    props.open && selectedSample.value
-        ? `${props.labId}:${selectedSample.value.id}:${props.week}`
-        : null,
-);
-
 watch(
-    requestKey,
-    async () => {
-        const sample = selectedSample.value;
-
-        if (!props.open || !sample) {
-            return;
-        }
-
-        loading.value = true;
-        error.value = null;
-        items.value = [];
-        filter.value = null;
-
-        try {
-            const url = bacteria.url([props.labId, sample.id], {
-                query: { week: props.week },
-            });
-            const response = await fetch(url, {
-                headers: { Accept: 'application/json' },
-            });
-
-            if (!response.ok) {
-                throw new Error('Unable to load sample details.');
-            }
-
-            const payload = (await response.json()) as {
-                bacteria: BacteriaObservation[];
-                filter: SampleFilterDetails | null;
-            };
-            items.value = payload.bacteria;
-            filter.value = payload.filter;
-        } catch (exception) {
-            error.value =
-                exception instanceof Error
-                    ? exception.message
-                    : 'Unable to load sample details.';
-        } finally {
-            loading.value = false;
+    [() => props.open, selectedSample],
+    ([isOpen, sample]) => {
+        if (isOpen && sample) {
+            emit('request-sample-details', sample);
         }
     },
     { immediate: true },
 );
+
+const details = computed(() =>
+    props.sampleDetails !== null &&
+    props.sampleDetails.sample.id === selectedSample.value?.id
+        ? props.sampleDetails
+        : null,
+);
+
+const items = computed(() => details.value?.bacteria ?? []);
+const filter = computed(() => details.value?.filter ?? null);
 
 const formatCount = (value: number | null) =>
     value === null
@@ -219,11 +173,17 @@ const formatCount = (value: number | null) =>
                         <p class="tech">{{ selectedSample.code }}</p>
                     </div>
 
-                    <p v-if="loading" class="text-sm text-muted-foreground">
+                    <p
+                        v-if="sampleDetailsLoading && details === null"
+                        class="text-sm text-muted-foreground"
+                    >
                         Loading…
                     </p>
-                    <p v-else-if="error" class="text-sm text-destructive">
-                        {{ error }}
+                    <p
+                        v-else-if="sampleDetailsError"
+                        class="text-sm text-destructive"
+                    >
+                        {{ sampleDetailsError }}
                     </p>
                     <template v-else>
                         <p
@@ -252,17 +212,17 @@ const formatCount = (value: number | null) =>
                                             {{ item.name }}
                                         </span>
                                         <span class="tech">
-                                            {{ item.short_name }}
+                                            {{ item.shortName }}
                                         </span>
                                     </span>
                                 </span>
 
                                 <Badge
-                                    v-if="item.observation_type === 'level'"
+                                    v-if="item.observationType === 'level'"
                                     variant="outline"
                                     class="uppercase"
                                 >
-                                    {{ item.growth_level }}
+                                    {{ item.growthLevel }}
                                 </Badge>
                                 <Badge
                                     v-else
@@ -289,7 +249,7 @@ const formatCount = (value: number | null) =>
                                         Placed
                                     </dt>
                                     <dd class="font-mono">
-                                        {{ filter.placed_week }}
+                                        {{ filter.placedWeek }}
                                     </dd>
                                 </div>
                                 <div

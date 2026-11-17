@@ -218,7 +218,7 @@ test('the lab map page returns the hierarchy and week options', function () {
             ->where('rows.0.shelves.0.levels.0.samples.0.summary.present_count', 0)
             ->where('engine', 'pgsql')
             ->where('engineError', null)
-            ->has('timings.pgsql'));
+            ->where('timings.pgsql.samples', 1));
 });
 
 test('the lab map query engine can be switched for the session', function () {
@@ -261,4 +261,26 @@ test('deleting a lab cascades to its samples', function () {
 
     expect(Lab::query()->count())->toBe(0)
         ->and(Sample::query()->count())->toBe(0);
+});
+
+test('clickhouse engines report an unloaded replica', function () {
+    $user = User::factory()->create();
+    $organization = labOrganizationWithRole($user, OrganizationRole::Owner);
+    $lab = createLabWithHierarchy($organization, 2, 2, 2);
+    createSample($lab);
+
+    $this->actingAs($user)
+        ->post(route('labs.engine'), ['engine' => 'clickhouse_snapshot'])
+        ->assertRedirect();
+
+    $this->actingAs($user)
+        ->get(route('labs.show', $lab))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('labs/Show')
+            ->where('engine', 'clickhouse_snapshot')
+            ->where(
+                'engineError',
+                'The ClickHouse snapshot lab map is unavailable. Run php artisan ch:load to load the ClickHouse dataset.',
+            ));
 });

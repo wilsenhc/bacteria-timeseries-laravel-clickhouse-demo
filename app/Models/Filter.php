@@ -2,13 +2,12 @@
 
 namespace App\Models;
 
-use Carbon\CarbonInterface;
+use App\Support\ObservationWeek;
 use Database\Factories\FilterFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 /**
@@ -57,14 +56,6 @@ class Filter extends Model
     }
 
     /**
-     * @return HasMany<FilterObservation, $this>
-     */
-    public function observations(): HasMany
-    {
-        return $this->hasMany(FilterObservation::class);
-    }
-
-    /**
      * Fill the placement's ISO week and Monday from the sample's organization timezone.
      */
     protected static function booted(): void
@@ -81,11 +72,11 @@ class Filter extends Model
             $timezone = $filter->sample?->lab?->organization->timezone
                 ?? config('app.timezone');
 
-            $local = $filter->placed_at->copy()->setTimezone($timezone);
+            $week = ObservationWeek::for($filter->placed_at, $timezone);
 
-            $filter->iso_year = $local->isoWeekYear;
-            $filter->iso_week = $local->isoWeek;
-            $filter->week_start = $local->startOfWeek(CarbonInterface::MONDAY)->toDateString();
+            $filter->iso_year = $week->isoYear;
+            $filter->iso_week = $week->isoWeek;
+            $filter->week_start = $week->startDate;
         });
     }
 }
