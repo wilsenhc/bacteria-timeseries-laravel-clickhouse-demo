@@ -23,6 +23,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('labs', [LabController::class, 'index'])->name('labs.index');
     Route::get('labs/create', [LabController::class, 'create'])->name('labs.create');
     Route::post('labs', [LabController::class, 'store'])->name('labs.store');
+    Route::post('labs/engine', [LabController::class, 'engine'])->name('labs.engine');
     Route::get('labs/{lab}', [LabController::class, 'show'])->name('labs.show');
     Route::get('labs/{lab}/edit', [LabController::class, 'edit'])->name('labs.edit');
     Route::patch('labs/{lab}', [LabController::class, 'update'])->name('labs.update');

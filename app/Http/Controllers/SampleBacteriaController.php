@@ -40,6 +40,7 @@ class SampleBacteriaController extends Controller
             ],
             'week' => $selectedWeek,
             'bacteria' => $mapQuery->sampleBacteria($sample, $weekEnd),
+            'filter' => $mapQuery->sampleFilter($sample, $weekEnd),
         ]);
     }
 }

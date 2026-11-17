@@ -3,21 +3,21 @@
 namespace App\Http\Controllers;
 
 use App\Actions\CreateLab;
+use App\Enums\LabMapEngine;
 use App\Http\Requests\StoreLabRequest;
 use App\Http\Requests\UpdateLabRequest;
 use App\Models\Lab;
-use App\Models\LabLevel;
-use App\Models\LabRow;
-use App\Models\LabShelf;
 use App\Models\Organization;
-use App\Models\Sample;
 use App\Support\LabMapQuery;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Throwable;
 
 class LabController extends Controller
 {
@@ -96,24 +96,45 @@ class LabController extends Controller
         Gate::authorize('view', $lab);
 
         $organization = $this->ensureInSelectedOrganization($request, $lab);
-
-        $lab->load([
-            'organization',
-            'rows' => fn (HasMany $query) => $query->orderBy('number'),
-            'rows.shelves' => fn (HasMany $query) => $query->orderBy('number'),
-            'rows.shelves.levels' => fn (HasMany $query) => $query->orderBy('number'),
-            'rows.shelves.levels.samples' => fn (HasMany $query) => $query->orderBy('code'),
-        ]);
+        $lab->setRelation('organization', $organization);
 
         $weeks = $mapQuery->weekOptions($lab);
         $weekParam = $request->query('week');
         $selectedWeek = $mapQuery->selectedWeek($weeks, is_string($weekParam) ? $weekParam : null);
         $weekEnd = $mapQuery->weekEnd($lab, $selectedWeek);
-        $summaries = $mapQuery->summaries($lab, $weekEnd);
+        $engine = $mapQuery->engine();
 
-        $rows = $lab->rows
-            ->map(fn (LabRow $row): array => $this->mapRow($row, $summaries, $mapQuery))
-            ->all();
+        $hierarchy = $this->labHierarchy($lab);
+
+        $queryStartedAt = microtime(true);
+        $engineError = null;
+
+        try {
+            $summaries = $mapQuery->summaries($lab, $weekEnd, $hierarchy['sample_ids']);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            $summaries = [];
+            $engineError = __('The :engine lab map is unavailable. Run php artisan ch:load to load the ClickHouse dataset.', [
+                'engine' => $engine->label(),
+            ]);
+        }
+
+        $queryMs = round((microtime(true) - $queryStartedAt) * 1000, 1);
+
+        $timings = $request->session()->get('lab_map_timings', []);
+
+        if ($engineError === null) {
+            $timings[$engine->value] = [
+                'lab_id' => $lab->id,
+                'week' => $selectedWeek['value'],
+                'ms' => $queryMs,
+            ];
+
+            $request->session()->put('lab_map_timings', $timings);
+        }
+
+        $rows = $this->mapHierarchy($hierarchy['records'], $summaries, $mapQuery);
 
         return Inertia::render('labs/Show', [
             'organization' => [
@@ -129,14 +150,31 @@ class LabController extends Controller
                 'shelves_per_row' => $lab->shelves_per_row,
                 'levels_per_shelf' => $lab->levels_per_shelf,
                 'levels_count' => $lab->levelsCount(),
-                'samples_count' => $lab->samples()->count(),
+                'samples_count' => count($hierarchy['sample_ids']),
                 'created_at' => $lab->created_at?->toIso8601String(),
             ],
             'weeks' => $weeks,
             'selectedWeek' => $selectedWeek,
             'rows' => $rows,
             'canManage' => $request->user()->can('update', $lab),
+            'engine' => $engine->value,
+            'timings' => $timings,
+            'engineError' => $engineError,
         ]);
+    }
+
+    /**
+     * Switch the lab map query engine for this session.
+     */
+    public function engine(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'engine' => ['required', Rule::enum(LabMapEngine::class)],
+        ]);
+
+        $request->session()->put('lab_map_engine', $validated['engine']);
+
+        return back();
     }
 
     /**
@@ -235,51 +273,93 @@ class LabController extends Controller
     }
 
     /**
-     * @param  array<int, array<string, mixed>>  $summaries
-     * @return array{id: int, number: int, shelves: array<int, array{id: int, number: int, levels: array<int, array{id: int, number: int, samples: array<int, array{id: int, code: string, summary: array<string, mixed>}>}>}>}
+     * @return array{records: Collection<int, \stdClass>, sample_ids: array<int, int>}
      */
-    private function mapRow(LabRow $row, array $summaries, LabMapQuery $mapQuery): array
+    private function labHierarchy(Lab $lab): array
     {
-        return [
-            'id' => $row->id,
-            'number' => $row->number,
-            'shelves' => $row->shelves
-                ->map(fn (LabShelf $shelf): array => $this->mapShelf($shelf, $summaries, $mapQuery))
-                ->all(),
-        ];
+        $records = DB::table('lab_rows as r')
+            ->join('lab_shelves as sh', 'sh.lab_row_id', '=', 'r.id')
+            ->join('lab_levels as l', 'l.lab_shelf_id', '=', 'sh.id')
+            ->leftJoin('samples as s', 's.lab_level_id', '=', 'l.id')
+            ->where('r.lab_id', $lab->id)
+            ->orderBy('r.number')
+            ->orderBy('sh.number')
+            ->orderBy('l.number')
+            ->orderBy('s.code')
+            ->get([
+                'r.id as row_id',
+                'r.number as row_number',
+                'sh.id as shelf_id',
+                'sh.number as shelf_number',
+                'l.id as level_id',
+                'l.number as level_number',
+                's.id as sample_id',
+                's.code as sample_code',
+            ]);
+
+        $sampleIds = $records
+            ->pluck('sample_id')
+            ->filter(fn ($sampleId): bool => $sampleId !== null)
+            ->map(fn ($sampleId): int => (int) $sampleId)
+            ->values()
+            ->all();
+
+        return ['records' => $records, 'sample_ids' => $sampleIds];
     }
 
     /**
+     * @param  Collection<int, \stdClass>  $records
      * @param  array<int, array<string, mixed>>  $summaries
-     * @return array{id: int, number: int, levels: array<int, array{id: int, number: int, samples: array<int, array{id: int, code: string, summary: array<string, mixed>}>}>}
+     * @return array<int, array<string, mixed>>
      */
-    private function mapShelf(LabShelf $shelf, array $summaries, LabMapQuery $mapQuery): array
+    private function mapHierarchy(Collection $records, array $summaries, LabMapQuery $mapQuery): array
     {
-        return [
-            'id' => $shelf->id,
-            'number' => $shelf->number,
-            'levels' => $shelf->levels
-                ->map(fn (LabLevel $level): array => $this->mapLevel($level, $summaries, $mapQuery))
-                ->all(),
-        ];
-    }
+        $rows = [];
 
-    /**
-     * @param  array<int, array<string, mixed>>  $summaries
-     * @return array{id: int, number: int, samples: array<int, array{id: int, code: string, summary: array<string, mixed>}>}
-     */
-    private function mapLevel(LabLevel $level, array $summaries, LabMapQuery $mapQuery): array
-    {
-        return [
-            'id' => $level->id,
-            'number' => $level->number,
-            'samples' => $level->samples
-                ->map(fn (Sample $sample): array => [
-                    'id' => $sample->id,
-                    'code' => $sample->code,
-                    'summary' => $summaries[$sample->id] ?? $mapQuery->emptySummary(),
-                ])
-                ->all(),
-        ];
+        foreach ($records as $record) {
+            $rowId = (int) $record->row_id;
+            $shelfId = (int) $record->shelf_id;
+            $levelId = (int) $record->level_id;
+
+            $rows[$rowId] ??= [
+                'id' => $rowId,
+                'number' => (int) $record->row_number,
+                'shelves' => [],
+            ];
+
+            $rows[$rowId]['shelves'][$shelfId] ??= [
+                'id' => $shelfId,
+                'number' => (int) $record->shelf_number,
+                'levels' => [],
+            ];
+
+            $rows[$rowId]['shelves'][$shelfId]['levels'][$levelId] ??= [
+                'id' => $levelId,
+                'number' => (int) $record->level_number,
+                'samples' => [],
+            ];
+
+            if ($record->sample_id !== null) {
+                $sampleId = (int) $record->sample_id;
+
+                $rows[$rowId]['shelves'][$shelfId]['levels'][$levelId]['samples'][] = [
+                    'id' => $sampleId,
+                    'code' => (string) $record->sample_code,
+                    'summary' => $summaries[$sampleId] ?? $mapQuery->emptySummary(),
+                ];
+            }
+        }
+
+        foreach ($rows as &$row) {
+            $row['shelves'] = array_values($row['shelves']);
+
+            foreach ($row['shelves'] as &$shelf) {
+                $shelf['levels'] = array_values($shelf['levels']);
+            }
+        }
+
+        unset($row, $shelf);
+
+        return array_values($rows);
     }
 }

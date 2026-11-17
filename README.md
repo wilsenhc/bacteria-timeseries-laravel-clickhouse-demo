@@ -3,8 +3,8 @@
 A Laravel 13 + Inertia/Vue demo for a timeseries-heavy workload backed by ClickHouse.
 
 Postgres remains the application database (users, sessions, cache, queues). ClickHouse is a
-secondary connection reserved for analytical data; the dataset, ingestion and dashboard are
-not wired up yet.
+secondary connection reserved for analytical data; the lab map is the first analytical
+surface, and ingestion is limited to its denormalized replica.
 
 ## Requirements
 
@@ -53,13 +53,43 @@ application container, so no `.env` change is needed. The host port is **8124** 
 collide with a local lerd install on 8123; the HTTP playground is at
 <http://localhost:8124/play?user=lerd&password=lerd>.
 
+### Lab map data
+
+The lab map has three interchangeable query engines: PostgreSQL (the default), ClickHouse (a
+raw denormalized scan), and ClickHouse snapshot (a pre-computed per-sample/week summary). The
+lab map header has a dropdown switch and shows the last measured state-query time for each
+engine on the current lab and week.
+
+Load the ClickHouse replica after rebuilding the PostgreSQL demo data:
+
+```bash
+php artisan db:seed --class=DemoStressSeeder
+php artisan ch:load
+```
+
+`ch:load` rebuilds the denormalized `lab_observations` MergeTree table and the
+`lab_weekly_summaries` snapshot, using ClickHouse's `postgresql()` table function for the
+federated copy and one `INSERT ... SELECT` per week for the snapshot.
+
+Benchmark the engines (and optionally a synthetic 5x per-lab dataset):
+
+```bash
+php artisan ch:bench --iterations=5
+php artisan ch:bench --scale=5 --iterations=5
+```
+
+The schema, the ClickHouse features used, the query, the snapshot, the benchmark, and the
+measured comparison are in
+[`docs/observations/clickhouse.md`](docs/observations/clickhouse.md).
+
 ### Tests
 
 ```bash
 php artisan test --filter=ClickHouseConnectionTest
+php artisan test --filter=ClickHouseLabMapTest
 ```
 
-The integration test hits a real ClickHouse server and is skipped with a message when the
+The integration tests hit a real ClickHouse server and are skipped with a message when the
 service is unreachable. CI starts ClickHouse, Postgres and Redis as service containers.
 
 ## Observations
@@ -74,12 +104,12 @@ The observations module adds organizations, labs, a fixed row/shelf/level hierar
 php artisan db:seed --class=DemoStressSeeder
 ```
 
-It creates 3 organizations in different timezones, 9 labs of three sizes (5×6×8, 8×8×10, and 8×10×16 rows × shelves × levels, giving 240, 640, and 1,280 sample places), 19,440 samples, roughly 800,000 observations, and about 1.9 million bacteria observations. On a local lerd install the seed takes about 8 minutes and peaks around 43 MB of memory. The seeder is deterministic and can be re-run. It attaches the existing user and two demo users (`demo.admin@example.com`, `demo.member@example.com`) to each organization with owner, admin, and member roles; the demo users use the password `password`.
+It creates 3 organizations in different timezones, 9 labs of three sizes (10×10×12, 20×10×16, and 20×20×16 rows × shelves × levels, giving 1,200, 3,200, and 6,400 sample places), 97,200 samples, 4,434,752 observations, and 10,606,888 bacteria observations. It also places 972 filters (1% of samples: 36, 96, and 192 per lab) with 8,333 weekly filter readings; a filter's location and first placed week are permanent, and its value does not carry over to the next week. On a local lerd install the seed takes about 47 minutes and peaks around 43 MB of memory. The seeder is deterministic and can be re-run. It attaches the existing user and two demo users (`demo.admin@example.com`, `demo.member@example.com`) to each organization with owner, admin, and member roles; the demo users use the password `password`.
 
 ### Pages
 
 - `/labs` — labs of the organization selected in the sidebar switcher.
-- `/labs/{lab}` — the lab map with a week selector and per-sample bacteria summaries.
+- `/labs/{lab}` — the lab map: a row/shelf/level matrix with one mark per level, a week selector, and a sample details modal.
 - `/organizations` — Manage Organizations: create, edit, and delete organizations.
 - `/bacteria` — the bacteria atlas.
 

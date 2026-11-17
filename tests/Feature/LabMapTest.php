@@ -3,10 +3,13 @@
 use App\Enums\GrowthLevel;
 use App\Enums\OrganizationRole;
 use App\Models\Bacteria;
+use App\Models\Filter;
+use App\Models\FilterObservation;
 use App\Models\Lab;
 use App\Models\Organization;
 use App\Models\Sample;
 use App\Models\User;
+use App\Support\LabMap\PostgresLabMapEngine;
 use App\Support\LabMapQuery;
 use Carbon\CarbonImmutable;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -111,7 +114,7 @@ test('the summary uses the highest level and the maximum count', function () {
         ->and($summary['present_count'])->toBe(3)
         ->and($summary['level_count'])->toBe(2)
         ->and($summary['count_count'])->toBe(1)
-        ->and($summary['single_bacterium'])->toBeNull();
+        ->and($summary['single'])->toBeNull();
 });
 
 test('a single present bacterium is returned for the cell', function () {
@@ -119,13 +122,97 @@ test('a single present bacterium is returned for the cell', function () {
 
     $summary = labMapSummary($this->lab, $this->sample, '2026-W45');
 
-    expect($summary['single_bacterium'])
+    expect($summary['single'])
         ->toMatchArray([
             'id' => $this->levelBacteria->id,
-            'name' => 'Level One',
+            'observation_type' => 'level',
             'growth_level' => 'medium',
             'count' => null,
         ]);
+});
+
+test('a filter appears from its placement week and does not carry over', function () {
+    $filter = Filter::factory()->forSample($this->sample)->create([
+        'placed_at' => '2026-11-02 12:00:00',
+    ]);
+
+    FilterObservation::factory()->for($filter)->create([
+        'observed_at' => '2026-11-04 10:00:00',
+        'value' => 10,
+    ]);
+    FilterObservation::factory()->for($filter)->create([
+        'observed_at' => '2026-11-05 10:00:00',
+        'value' => 15,
+    ]);
+    FilterObservation::factory()->for($filter)->create([
+        'observed_at' => '2026-11-10 10:00:00',
+        'value' => 20,
+    ]);
+
+    $before = labMapSummary($this->lab, $this->sample, '2026-W44');
+    $placed = labMapSummary($this->lab, $this->sample, '2026-W45');
+    $next = labMapSummary($this->lab, $this->sample, '2026-W46');
+
+    $week47 = CarbonImmutable::parse('2026-11-22 23:59:59', 'UTC');
+    $after = app(PostgresLabMapEngine::class)->summaries($this->lab, $week47);
+
+    expect($before['filter'] ?? null)->toBeNull()
+        ->and($placed['present_count'])->toBe(0)
+        ->and($placed['filter'])->toBe(['value' => 15])
+        ->and($next['filter'])->toBe(['value' => 20])
+        ->and($after[$this->sample->id]['filter'])->toBe(['value' => null]);
+});
+
+test('a filter does not change the bacteria summary', function () {
+    createObservation($this->sample, '2026-11-02 12:00:00', $this->levelBacteria, GrowthLevel::High);
+
+    $filter = Filter::factory()->forSample($this->sample)->create([
+        'placed_at' => '2026-11-02 12:00:00',
+    ]);
+    FilterObservation::factory()->for($filter)->create([
+        'observed_at' => '2026-11-04 10:00:00',
+        'value' => 40,
+    ]);
+
+    $summary = labMapSummary($this->lab, $this->sample, '2026-W45');
+
+    expect($summary)
+        ->toMatchArray([
+            'present_count' => 1,
+            'level_count' => 1,
+            'count_count' => 0,
+            'highest_level' => 'high',
+            'filter' => ['value' => 40],
+        ]);
+});
+
+test('the sample details endpoint returns the filter placement and reading', function () {
+    $filter = Filter::factory()->forSample($this->sample)->create([
+        'placed_at' => '2026-11-02 12:00:00',
+    ]);
+    FilterObservation::factory()->for($filter)->create([
+        'observed_at' => '2026-11-04 10:00:00',
+        'value' => 42,
+    ]);
+
+    $this->actingAs($this->user)
+        ->getJson(route('labs.samples.bacteria', [
+            $this->lab,
+            $this->sample,
+            'week' => '2026-W45',
+        ]))
+        ->assertOk()
+        ->assertJsonPath('filter.placed_week', '2026-W45')
+        ->assertJsonPath('filter.value', 42);
+
+    $this->actingAs($this->user)
+        ->getJson(route('labs.samples.bacteria', [
+            $this->lab,
+            $this->sample,
+            'week' => '2026-W44',
+        ]))
+        ->assertOk()
+        ->assertJsonPath('filter', null);
 });
 
 test('the lab map page returns the hierarchy and current week', function () {
@@ -140,6 +227,7 @@ test('the lab map page returns the hierarchy and current week', function () {
             ->has('rows.0.shelves', 1)
             ->has('rows.0.shelves.0.levels', 1)
             ->has('rows.0.shelves.0.levels.0.samples', 1)
+            ->missing('bacteria')
             ->where('rows.0.shelves.0.levels.0.samples.0.summary.present_count', 0));
 });
 
