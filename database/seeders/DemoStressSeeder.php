@@ -19,15 +19,23 @@ class DemoStressSeeder extends Seeder
     private const RANDOM_SEED = 20261112;
 
     /**
-     * One small, one medium, and one large lab per organization: 2,160 sample
-     * places in total, which is three times the original 720-place dataset.
+     * Multiplier for readings per sample per week. The normal demo seed uses 1;
+     * `demo:seed --scale=10` produces the 100M-row stress dataset.
+     */
+    public static int $observationScale = 1;
+
+    /**
+     * One small, one medium, and one large lab per organization: 10,800 sample
+     * places in total, five times the previous 2,160-place dataset. Every
+     * dimension stays within the 1–20 limit, so each lab is also valid through
+     * the normal create form.
      *
      * @var array<int, array{letter: string, rows: int, shelves: int, levels: int}>
      */
     private const LAB_PROFILES = [
-        ['letter' => 'A', 'rows' => 5, 'shelves' => 6, 'levels' => 8],    // 240 sample places
-        ['letter' => 'B', 'rows' => 8, 'shelves' => 8, 'levels' => 10],   // 640 sample places
-        ['letter' => 'C', 'rows' => 8, 'shelves' => 10, 'levels' => 16],  // 1,280 sample places
+        ['letter' => 'A', 'rows' => 10, 'shelves' => 10, 'levels' => 12], // 1,200 sample places (5x 240)
+        ['letter' => 'B', 'rows' => 20, 'shelves' => 10, 'levels' => 16], // 3,200 sample places (5x 640)
+        ['letter' => 'C', 'rows' => 20, 'shelves' => 20, 'levels' => 16], // 6,400 sample places (5x 1,280)
     ];
 
     /**
@@ -79,6 +87,8 @@ class DemoStressSeeder extends Seeder
 
         $generator->flush();
         $this->resetObservationSequences();
+
+        $this->call(FilterSeeder::class);
 
         $output?->progressFinish();
 
