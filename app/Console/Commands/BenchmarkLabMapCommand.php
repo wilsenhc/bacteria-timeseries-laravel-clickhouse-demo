@@ -2,9 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Models\ClickHouse\LabFilter;
+use App\Models\ClickHouse\LabFilterObservation;
+use App\Models\ClickHouse\LabObservation;
+use App\Models\ClickHouse\LabWeeklySummary;
 use App\Models\Lab;
 use App\Support\LabMap\ClickHouseLabMapEngine;
-use App\Support\LabMap\ClickHouseLabMapTable;
 use App\Support\LabMap\ClickHouseSnapshotLabMapEngine;
 use App\Support\LabMap\LabMapEngineContract;
 use App\Support\LabMap\PostgresLabMapEngine;
@@ -84,10 +87,9 @@ class BenchmarkLabMapCommand extends Command
             return self::FAILURE;
         } finally {
             if ($bench !== null) {
-                ClickHouseLabMapTable::dropSummary($clickhouse, $bench['summary']);
-                ClickHouseLabMapTable::drop($clickhouse, $bench['raw']);
-                ClickHouseLabMapTable::dropFilterObservations($clickhouse, $bench['filterObservations']);
-                ClickHouseLabMapTable::dropFilters($clickhouse, $bench['filters']);
+                foreach ([$bench['summary'], $bench['raw'], $bench['filterObservations'], $bench['filters']] as $table) {
+                    $clickhouse->statement('DROP TABLE IF EXISTS '.$table);
+                }
             }
         }
     }
@@ -102,15 +104,14 @@ class BenchmarkLabMapCommand extends Command
         $filters = 'lab_filters_bench';
         $filterObservations = 'lab_filter_observations_bench';
 
-        ClickHouseLabMapTable::dropSummary($connection, $summary);
-        ClickHouseLabMapTable::drop($connection, $raw);
-        ClickHouseLabMapTable::dropFilterObservations($connection, $filterObservations);
-        ClickHouseLabMapTable::dropFilters($connection, $filters);
+        foreach ([$summary, $raw, $filterObservations, $filters] as $table) {
+            $connection->statement('DROP TABLE IF EXISTS '.$table);
+        }
 
-        ClickHouseLabMapTable::create($connection, $raw);
-        ClickHouseLabMapTable::createSummary($connection, $summary);
-        ClickHouseLabMapTable::createFilters($connection, $filters);
-        ClickHouseLabMapTable::createFilterObservations($connection, $filterObservations);
+        $connection->statement('CREATE TABLE '.$raw.' AS '.LabObservation::TABLE);
+        $connection->statement('CREATE TABLE '.$summary.' AS '.LabWeeklySummary::TABLE);
+        $connection->statement('CREATE TABLE '.$filters.' AS '.LabFilter::TABLE);
+        $connection->statement('CREATE TABLE '.$filterObservations.' AS '.LabFilterObservation::TABLE);
 
         for ($copy = 0; $copy < 5; $copy++) {
             $offset = $copy * 1_000_000;
@@ -119,7 +120,7 @@ class BenchmarkLabMapCommand extends Command
                 'INSERT INTO %s SELECT lab_id, sample_id + %d, bacteria_id, observed_at, iso_year, iso_week, week_start, growth_level, `count`, bacteria_name, bacteria_short_name, bacteria_color, bacteria_icon, observation_type FROM %s WHERE lab_id = ?',
                 $raw,
                 $offset,
-                ClickHouseLabMapTable::NAME,
+                LabObservation::TABLE,
             ), [$lab->id]);
 
             $connection->statement(sprintf(
@@ -127,7 +128,7 @@ class BenchmarkLabMapCommand extends Command
                 $summary,
                 $offset,
                 $offset,
-                ClickHouseLabMapTable::SUMMARY_NAME,
+                LabWeeklySummary::TABLE,
             ), [$lab->id]);
 
             $connection->statement(sprintf(
@@ -135,7 +136,7 @@ class BenchmarkLabMapCommand extends Command
                 $filters,
                 $offset,
                 $offset,
-                ClickHouseLabMapTable::FILTER_NAME,
+                LabFilter::TABLE,
             ), [$lab->id]);
 
             $connection->statement(sprintf(
@@ -143,7 +144,7 @@ class BenchmarkLabMapCommand extends Command
                 $filterObservations,
                 $offset,
                 $offset,
-                ClickHouseLabMapTable::FILTER_OBSERVATION_NAME,
+                LabFilterObservation::TABLE,
             ), [$lab->id]);
         }
 

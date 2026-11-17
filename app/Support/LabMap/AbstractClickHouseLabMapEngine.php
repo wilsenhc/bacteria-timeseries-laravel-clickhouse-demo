@@ -14,9 +14,7 @@ abstract class AbstractClickHouseLabMapEngine implements LabMapEngineContract
 
     public function __construct(
         protected readonly string $table,
-    ) {
-        ClickHouseLabMapTable::assertName($this->table);
-    }
+    ) {}
 
     public function summaries(Lab $lab, CarbonImmutable $weekEnd): array
     {

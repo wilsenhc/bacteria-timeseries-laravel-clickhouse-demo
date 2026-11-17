@@ -1,14 +1,18 @@
 <?php
 
+use App\Models\ClickHouse\LabFilter;
+use App\Models\ClickHouse\LabFilterObservation;
+use App\Models\ClickHouse\LabObservation;
+use App\Models\ClickHouse\LabWeeklySummary;
 use App\Models\Filter;
 use App\Models\Lab;
 use App\Models\Organization;
 use App\Models\Sample;
 use App\Support\LabMap\ClickHouseLabMapEngine;
-use App\Support\LabMap\ClickHouseLabMapTable;
 use App\Support\LabMap\ClickHouseSnapshotLabMapEngine;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -23,26 +27,32 @@ beforeEach(function () {
     $this->clickHouseFilterTable = 'lab_filters_test_'.Str::lower(Str::random(8));
     $this->clickHouseFilterObservationTable = 'lab_filter_observations_test_'.Str::lower(Str::random(8));
     $this->clickHouseSummaryTable = null;
-    ClickHouseLabMapTable::create(DB::connection('clickhouse'), $this->clickHouseTable);
-    ClickHouseLabMapTable::createFilters(DB::connection('clickhouse'), $this->clickHouseFilterTable);
-    ClickHouseLabMapTable::createFilterObservations(DB::connection('clickhouse'), $this->clickHouseFilterObservationTable);
+
+    if (! Schema::connection('clickhouse')->hasTable(LabObservation::TABLE)) {
+        $this->markTestSkipped('ClickHouse tables are missing. Run php artisan migrate.');
+    }
+
+    $clickhouse = DB::connection('clickhouse');
+    $clickhouse->statement('CREATE TABLE '.$this->clickHouseTable.' AS '.LabObservation::TABLE);
+    $clickhouse->statement('CREATE TABLE '.$this->clickHouseFilterTable.' AS '.LabFilter::TABLE);
+    $clickhouse->statement('CREATE TABLE '.$this->clickHouseFilterObservationTable.' AS '.LabFilterObservation::TABLE);
 });
 
 afterEach(function () {
     if (isset($this->clickHouseSummaryTable)) {
-        ClickHouseLabMapTable::dropSummary(DB::connection('clickhouse'), $this->clickHouseSummaryTable);
+        DB::connection('clickhouse')->statement('DROP TABLE IF EXISTS '.$this->clickHouseSummaryTable);
     }
 
     if (isset($this->clickHouseFilterObservationTable)) {
-        ClickHouseLabMapTable::dropFilterObservations(DB::connection('clickhouse'), $this->clickHouseFilterObservationTable);
+        DB::connection('clickhouse')->statement('DROP TABLE IF EXISTS '.$this->clickHouseFilterObservationTable);
     }
 
     if (isset($this->clickHouseFilterTable)) {
-        ClickHouseLabMapTable::dropFilters(DB::connection('clickhouse'), $this->clickHouseFilterTable);
+        DB::connection('clickhouse')->statement('DROP TABLE IF EXISTS '.$this->clickHouseFilterTable);
     }
 
     if (isset($this->clickHouseTable)) {
-        ClickHouseLabMapTable::drop(DB::connection('clickhouse'), $this->clickHouseTable);
+        DB::connection('clickhouse')->statement('DROP TABLE IF EXISTS '.$this->clickHouseTable);
     }
 });
 
@@ -188,7 +198,7 @@ it('serves a week from the precomputed summary snapshot', function () {
     $filtered = createSample($lab, 'R1-S1-L1-03');
 
     $this->clickHouseSummaryTable = 'lab_summaries_test_'.Str::lower(Str::random(8));
-    ClickHouseLabMapTable::createSummary(DB::connection('clickhouse'), $this->clickHouseSummaryTable);
+    DB::connection('clickhouse')->statement('CREATE TABLE '.$this->clickHouseSummaryTable.' AS '.LabWeeklySummary::TABLE);
 
     DB::connection('clickhouse')->statement(sprintf(
         "INSERT INTO %s (lab_id, week_start, sample_id, present_count, level_count, count_count, highest_level, max_count, single_id, single_observation_type, single_growth_level, single_count, filter_id, filter_value) VALUES (%d, '2026-11-09', %d, 2, 1, 1, 'low', 1200, 0, '', 'none', -1, 0, -1), (%d, '2026-11-09', %d, 1, 1, 0, 'high', -1, 12, 'level', 'high', -1, 0, -1), (%d, '2026-11-09', %d, 0, 0, 0, 'none', -1, 0, '', 'none', -1, 500, 33)",

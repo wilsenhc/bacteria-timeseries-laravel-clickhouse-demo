@@ -2,22 +2,20 @@
 
 namespace App\Support\LabMap;
 
+use App\Models\ClickHouse\LabWeeklySummary;
 use App\Models\Lab;
 use App\Models\Sample;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
-use Illuminate\Support\Facades\DB;
 
 class ClickHouseSnapshotLabMapEngine implements LabMapEngineContract
 {
     use MapsClickHouseLabMapRows;
 
     public function __construct(
-        private readonly string $table = ClickHouseLabMapTable::SUMMARY_NAME,
+        private readonly string $table = LabWeeklySummary::TABLE,
         private readonly ?LabMapEngineContract $drawerEngine = null,
-    ) {
-        ClickHouseLabMapTable::assertName($this->table);
-    }
+    ) {}
 
     public function summaries(Lab $lab, CarbonImmutable $weekEnd): array
     {
@@ -26,24 +24,31 @@ class ClickHouseSnapshotLabMapEngine implements LabMapEngineContract
             ->startOfWeek(CarbonInterface::MONDAY)
             ->toDateString();
 
-        $rows = DB::connection('clickhouse')->select(sprintf(<<<'SQL'
-SELECT
-    sample_id,
-    present_count,
-    level_count,
-    count_count,
-    highest_level,
-    max_count,
-    single_id,
-    single_observation_type,
-    single_growth_level,
-    single_count,
-    filter_id,
-    filter_value
-FROM %s
-PREWHERE lab_id = ?
-WHERE week_start = toDate(?)
-SQL, $this->table), [$lab->id, $weekStart]);
+        $query = (new LabWeeklySummary)
+            ->setTable($this->table)
+            ->newQuery();
+
+        $rows = $query
+            ->toBase()
+            ->select([
+                'sample_id',
+                'present_count',
+                'level_count',
+                'count_count',
+                'highest_level',
+                'max_count',
+                'single_id',
+                'single_observation_type',
+                'single_growth_level',
+                'single_count',
+                'filter_id',
+                'filter_value',
+            ])
+            ->where('lab_id', $lab->id)
+            ->where('week_start', $weekStart)
+            ->get()
+            ->map(fn (mixed $summary): array => (array) $summary)
+            ->all();
 
         return $this->mapSummaries($rows);
     }

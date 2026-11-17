@@ -2,20 +2,21 @@
 
 namespace App\Support\LabMap;
 
+use App\Models\ClickHouse\LabFilter;
+use App\Models\ClickHouse\LabFilterObservation;
+use App\Models\ClickHouse\LabObservation;
 use App\Models\Lab;
 use App\Models\Sample;
 
 class ClickHouseLabMapEngine extends AbstractClickHouseLabMapEngine
 {
     public function __construct(
-        string $table = ClickHouseLabMapTable::NAME,
-        private readonly string $filterTable = ClickHouseLabMapTable::FILTER_NAME,
-        private readonly string $filterObservationTable = ClickHouseLabMapTable::FILTER_OBSERVATION_NAME,
+        string $table = LabObservation::TABLE,
+        private readonly string $filterTable = LabFilter::TABLE,
+        private readonly string $filterObservationTable = LabFilterObservation::TABLE,
     ) {
         parent::__construct($table);
 
-        ClickHouseLabMapTable::assertName($this->filterTable);
-        ClickHouseLabMapTable::assertName($this->filterObservationTable);
     }
 
     protected function statesSql(): string
