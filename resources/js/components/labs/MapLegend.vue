@@ -1,30 +1,26 @@
+<script setup lang="ts">
+import FilterBadge from '@/components/labs/FilterBadge.vue';
+import LevelMark from '@/components/labs/LevelMark.vue';
+import { sampleState, stateLabels, type LevelState } from '@/lib/lab-map-state';
+
+const states: LevelState[] = ['high', 'medium', 'low', 'count', 'empty'];
+</script>
+
 <template>
     <div
-        class="flex flex-wrap items-center gap-4 text-xs text-muted-foreground"
+        class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground"
     >
-        <span class="flex items-center gap-1.5">
-            <span class="size-2.5 rounded-full bg-red-500" />
-            High
+        <span
+            v-for="state in states"
+            :key="state"
+            class="inline-flex items-center gap-1.5"
+        >
+            <LevelMark :state="state" />
+            {{ stateLabels[state] }}
         </span>
-        <span class="flex items-center gap-1.5">
-            <span class="size-2.5 rounded-full bg-amber-500" />
-            Medium
-        </span>
-        <span class="flex items-center gap-1.5">
-            <span class="size-2.5 rounded-full bg-emerald-500" />
-            Low
-        </span>
-        <span class="flex items-center gap-1.5">
-            <span class="size-2.5 rounded-full bg-muted-foreground/30" />
-            Empty
-        </span>
-        <span class="flex items-center gap-1.5">
-            <span
-                class="rounded-full bg-sky-500/10 px-1.5 py-0.5 font-mono text-[0.65rem] text-sky-700 dark:text-sky-300"
-            >
-                1.2k
-            </span>
-            Count
+        <span class="inline-flex items-center gap-1.5">
+            <FilterBadge :filter="{ value: null }" />
+            Filter
         </span>
     </div>
 </template>

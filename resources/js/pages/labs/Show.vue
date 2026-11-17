@@ -9,9 +9,10 @@ import {
     Pencil,
     Trash2,
 } from '@lucide/vue';
-import LabMapShelf from '@/components/labs/LabMapShelf.vue';
+import LabEngineSwitch from '@/components/labs/LabEngineSwitch.vue';
+import LabMapRow from '@/components/labs/LabMapRow.vue';
+import LevelDetailsModal from '@/components/labs/LevelDetailsModal.vue';
 import MapLegend from '@/components/labs/MapLegend.vue';
-import SampleDetailsSheet from '@/components/labs/SampleDetailsSheet.vue';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -34,8 +35,10 @@ import {
 import { destroy, edit, index as labsIndex, show } from '@/routes/labs';
 import type {
     LabDetail,
-    LabMapRow,
-    LabMapSample,
+    LabMapEngine,
+    LabMapLevel,
+    LabMapRow as LabMapRowData,
+    LabMapTiming,
     WeekOption,
 } from '@/types/lab';
 import type { OrganizationOption } from '@/types/organization';
@@ -45,8 +48,11 @@ const props = defineProps<{
     lab: LabDetail;
     weeks: WeekOption[];
     selectedWeek: WeekOption;
-    rows: LabMapRow[];
+    rows: LabMapRowData[];
     canManage: boolean;
+    engine: LabMapEngine;
+    timings: Record<string, LabMapTiming>;
+    engineError: string | null;
 }>();
 
 defineOptions({
@@ -92,7 +98,7 @@ const loadWeek = (week: string) => {
         {
             preserveState: true,
             preserveScroll: true,
-            only: ['selectedWeek', 'rows'],
+            only: ['selectedWeek', 'rows', 'timings', 'engineError'],
         },
     );
 };
@@ -113,13 +119,39 @@ const goToWeek = (week: WeekOption | null) => {
     loadWeek(week.value);
 };
 
-const selectedSample = ref<LabMapSample | null>(null);
-const sheetOpen = ref(false);
+const selectedLevel = ref<LabMapLevel | null>(null);
+const modalOpen = ref(false);
 
-const openSample = (sample: LabMapSample) => {
-    selectedSample.value = sample;
-    sheetOpen.value = true;
+const openLevel = (level: LabMapLevel) => {
+    selectedLevel.value = level;
+    modalOpen.value = true;
 };
+
+watch(
+    () => props.rows,
+    (rows) => {
+        if (selectedLevel.value === null) {
+            return;
+        }
+
+        const id = selectedLevel.value.id;
+        selectedLevel.value =
+            rows
+                .flatMap((row) => row.shelves)
+                .flatMap((shelf) => shelf.levels)
+                .find((level) => level.id === id) ?? null;
+
+        if (selectedLevel.value === null) {
+            modalOpen.value = false;
+        }
+    },
+);
+
+const shelfCount = computed(() =>
+    props.rows.reduce((count, row) => Math.max(count, row.shelves.length), 0),
+);
+
+const mapMinWidth = computed(() => `${2.5 + shelfCount.value * 1.5}rem`);
 
 const hasObservations = computed(() =>
     props.rows.some((row) =>
@@ -189,46 +221,62 @@ const formatDate = (value: string | null) =>
                 </p>
             </div>
 
-            <div v-if="canManage" class="flex shrink-0 items-center gap-2">
-                <Link
-                    :href="edit(lab.id)"
-                    :class="buttonVariants({ variant: 'outline', size: 'sm' })"
-                >
-                    <Pencil class="size-3.5" />
-                    Edit
-                </Link>
+            <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <LabEngineSwitch
+                    :engine="engine"
+                    :lab-id="lab.id"
+                    :week="selectedWeek.value"
+                    :timings="timings"
+                />
 
-                <Dialog>
-                    <DialogTrigger as-child>
-                        <Button variant="destructive" size="sm">
-                            <Trash2 class="size-3.5" />
-                            Delete
-                        </Button>
-                    </DialogTrigger>
-                    <DialogContent>
-                        <DialogHeader>
-                            <DialogTitle>Delete {{ lab.name }}?</DialogTitle>
-                            <DialogDescription>
-                                This permanently deletes the lab, its
-                                {{ lab.levels_count }} levels,
-                                {{ lab.samples_count }} samples, and all
-                                observations inside them. This cannot be undone.
-                            </DialogDescription>
-                        </DialogHeader>
-                        <DialogFooter class="gap-2">
-                            <DialogClose as-child>
-                                <Button variant="secondary">Cancel</Button>
-                            </DialogClose>
-                            <Button
-                                variant="destructive"
-                                :disabled="deleteForm.processing"
-                                @click="deleteForm.delete(destroy.url(lab.id))"
-                            >
-                                Delete lab
+                <template v-if="canManage">
+                    <Link
+                        :href="edit(lab.id)"
+                        :class="
+                            buttonVariants({ variant: 'outline', size: 'sm' })
+                        "
+                    >
+                        <Pencil class="size-3.5" />
+                        Edit
+                    </Link>
+
+                    <Dialog>
+                        <DialogTrigger as-child>
+                            <Button variant="destructive" size="sm">
+                                <Trash2 class="size-3.5" />
+                                Delete
                             </Button>
-                        </DialogFooter>
-                    </DialogContent>
-                </Dialog>
+                        </DialogTrigger>
+                        <DialogContent>
+                            <DialogHeader>
+                                <DialogTitle>
+                                    Delete {{ lab.name }}?
+                                </DialogTitle>
+                                <DialogDescription>
+                                    This permanently deletes the lab, its
+                                    {{ lab.levels_count }} levels,
+                                    {{ lab.samples_count }} samples, and all
+                                    observations inside them. This cannot be
+                                    undone.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <DialogFooter class="gap-2">
+                                <DialogClose as-child>
+                                    <Button variant="secondary">Cancel</Button>
+                                </DialogClose>
+                                <Button
+                                    variant="destructive"
+                                    :disabled="deleteForm.processing"
+                                    @click="
+                                        deleteForm.delete(destroy.url(lab.id))
+                                    "
+                                >
+                                    Delete lab
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+                </template>
             </div>
         </header>
 
@@ -278,10 +326,20 @@ const formatDate = (value: string | null) =>
                     <span v-if="selectedWeek.is_current">(in progress)</span>
                 </p>
                 <MapLegend />
+                <p class="hidden text-xs text-muted-foreground lg:block">
+                    Click a level for its samples
+                </p>
             </div>
         </section>
 
-        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        <div class="min-h-0 flex-1 overflow-auto overscroll-contain pr-1">
+            <div
+                v-if="engineError"
+                class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+            >
+                {{ engineError }}
+            </div>
+
             <div
                 v-if="!hasObservations"
                 class="mb-3 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
@@ -289,39 +347,32 @@ const formatDate = (value: string | null) =>
                 <span class="font-medium text-foreground">
                     No present bacteria.
                 </span>
-                This week has no positive results for any sample.
+                This week has no positive bacteria results for any sample.
             </div>
 
-            <div class="flex flex-col gap-4 pb-2">
-                <section
+            <div
+                class="flex flex-col gap-3 pb-2"
+                :style="{ minWidth: mapMinWidth }"
+            >
+                <LabMapRow
                     v-for="row in rows"
                     :key="row.id"
-                    class="flex flex-col gap-2"
-                >
-                    <div class="flex items-center gap-3">
-                        <p class="tech uppercase">Row {{ row.number }}</p>
-                        <span class="h-px flex-1 bg-border" />
-                    </div>
-
-                    <div class="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                        <LabMapShelf
-                            v-for="shelf in row.shelves"
-                            :key="shelf.id"
-                            :shelf="shelf"
-                            @select="openSample"
-                        />
-                    </div>
-                </section>
+                    :row="row"
+                    :selected-level-id="
+                        modalOpen ? (selectedLevel?.id ?? null) : null
+                    "
+                    @select="openLevel"
+                />
             </div>
         </div>
 
-        <SampleDetailsSheet
-            :open="sheetOpen"
-            :sample="selectedSample"
+        <LevelDetailsModal
+            :open="modalOpen"
+            :level="selectedLevel"
             :lab-id="lab.id"
             :week="selectedWeek.value"
             :week-label="selectedWeek.label"
-            @update:open="sheetOpen = $event"
+            @update:open="modalOpen = $event"
         />
     </div>
 </template>

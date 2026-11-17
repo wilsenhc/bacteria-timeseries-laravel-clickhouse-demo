@@ -1,0 +1,324 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue';
+import BacteriaIcon from '@/components/BacteriaIcon.vue';
+import FilterBadge from '@/components/labs/FilterBadge.vue';
+import LevelMark from '@/components/labs/LevelMark.vue';
+import { sampleState, stateLabels, type LevelState } from '@/lib/lab-map-state';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogClose,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import { bacteria } from '@/routes/labs/samples';
+import type {
+    BacteriaObservation,
+    LabMapLevel,
+    LabMapSample,
+    SampleFilterDetails,
+} from '@/types/lab';
+
+const props = defineProps<{
+    open: boolean;
+    level: LabMapLevel | null;
+    labId: number;
+    week: string;
+    weekLabel: string;
+}>();
+
+const emit = defineEmits<{
+    'update:open': [value: boolean];
+}>();
+
+const open = computed({
+    get: () => props.open,
+    set: (value: boolean) => emit('update:open', value),
+});
+
+const samples = computed(() => props.level?.samples ?? []);
+
+const levelCode = computed(
+    () =>
+        samples.value[0]?.code.replace(/-\d{2}$/, '') ??
+        (props.level ? `Level ${props.level.number}` : 'Level'),
+);
+
+const rank: Record<LevelState, number> = {
+    high: 3,
+    medium: 2,
+    low: 1,
+    count: 0.5,
+    empty: 0,
+};
+
+const selectedSample = ref<LabMapSample | null>(null);
+const title = ref<{ $el?: HTMLElement } | null>(null);
+
+const focusTitle = (event: Event) => {
+    event.preventDefault();
+    title.value?.$el?.focus();
+};
+
+watch(
+    () => props.level,
+    (level) => {
+        if (!level) {
+            selectedSample.value = null;
+
+            return;
+        }
+
+        selectedSample.value =
+            [...level.samples].sort(
+                (a, b) =>
+                    rank[sampleState(b.summary)] - rank[sampleState(a.summary)],
+            )[0] ?? null;
+    },
+    { immediate: true },
+);
+
+const loading = ref(false);
+const error = ref<string | null>(null);
+const items = ref<BacteriaObservation[]>([]);
+const filter = ref<SampleFilterDetails | null>(null);
+
+const requestKey = computed(() =>
+    props.open && selectedSample.value
+        ? `${props.labId}:${selectedSample.value.id}:${props.week}`
+        : null,
+);
+
+watch(
+    requestKey,
+    async () => {
+        const sample = selectedSample.value;
+
+        if (!props.open || !sample) {
+            return;
+        }
+
+        loading.value = true;
+        error.value = null;
+        items.value = [];
+        filter.value = null;
+
+        try {
+            const url = bacteria.url([props.labId, sample.id], {
+                query: { week: props.week },
+            });
+            const response = await fetch(url, {
+                headers: { Accept: 'application/json' },
+            });
+
+            if (!response.ok) {
+                throw new Error('Unable to load sample details.');
+            }
+
+            const payload = (await response.json()) as {
+                bacteria: BacteriaObservation[];
+                filter: SampleFilterDetails | null;
+            };
+            items.value = payload.bacteria;
+            filter.value = payload.filter;
+        } catch (exception) {
+            error.value =
+                exception instanceof Error
+                    ? exception.message
+                    : 'Unable to load sample details.';
+        } finally {
+            loading.value = false;
+        }
+    },
+    { immediate: true },
+);
+
+const formatCount = (value: number | null) =>
+    value === null
+        ? null
+        : new Intl.NumberFormat(undefined, {
+              notation: 'compact',
+              maximumFractionDigits: 1,
+          }).format(value);
+</script>
+
+<template>
+    <Dialog v-model:open="open">
+        <DialogContent
+            class="max-h-[85dvh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl"
+            @open-auto-focus="focusTitle"
+        >
+            <DialogHeader>
+                <DialogTitle
+                    ref="title"
+                    tabindex="-1"
+                    class="focus:outline-none"
+                >
+                    {{ levelCode }}
+                </DialogTitle>
+                <DialogDescription>
+                    {{ weekLabel }} · {{ samples.length }} samples · pick a
+                    sample for its details
+                </DialogDescription>
+            </DialogHeader>
+
+            <div class="flex min-h-0 flex-col gap-5 overflow-y-auto pr-1">
+                <p
+                    v-if="samples.length === 0"
+                    class="text-sm text-muted-foreground"
+                >
+                    No samples at this level.
+                </p>
+
+                <div v-else class="grid gap-2 sm:grid-cols-3">
+                    <button
+                        v-for="sample in samples"
+                        :key="sample.id"
+                        type="button"
+                        :aria-pressed="selectedSample?.id === sample.id"
+                        :class="[
+                            'flex flex-col gap-1.5 rounded-md border p-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                            selectedSample?.id === sample.id
+                                ? 'border-foreground/25 bg-muted'
+                                : 'border-border hover:bg-muted/60',
+                        ]"
+                        @click="selectedSample = sample"
+                    >
+                        <span class="flex items-center justify-between gap-2">
+                            <span class="truncate font-mono text-[0.7rem]">
+                                {{ sample.code }}
+                            </span>
+                            <FilterBadge
+                                v-if="sample.summary.filter"
+                                :filter="sample.summary.filter"
+                            />
+                        </span>
+                        <span
+                            class="flex items-center justify-between gap-2 text-[0.7rem] text-muted-foreground"
+                        >
+                            <span class="flex items-center gap-1.5">
+                                <LevelMark
+                                    :state="sampleState(sample.summary)"
+                                />
+                                {{ stateLabels[sampleState(sample.summary)] }}
+                            </span>
+                            {{ sample.summary.present_count }} present
+                        </span>
+                    </button>
+                </div>
+
+                <template v-if="selectedSample">
+                    <div
+                        class="flex items-center justify-between gap-3 border-t border-border pt-4"
+                    >
+                        <p class="tech uppercase">Present bacteria</p>
+                        <p class="tech">{{ selectedSample.code }}</p>
+                    </div>
+
+                    <p v-if="loading" class="text-sm text-muted-foreground">
+                        Loading…
+                    </p>
+                    <p v-else-if="error" class="text-sm text-destructive">
+                        {{ error }}
+                    </p>
+                    <template v-else>
+                        <p
+                            v-if="items.length === 0"
+                            class="text-sm text-muted-foreground"
+                        >
+                            No present bacteria in this week.
+                        </p>
+
+                        <div v-else class="grid gap-2 pb-1 sm:grid-cols-2">
+                            <div
+                                v-for="item in items"
+                                :key="item.id"
+                                class="flex items-center justify-between gap-3 rounded-md border border-border p-3"
+                            >
+                                <span class="flex min-w-0 items-center gap-2">
+                                    <BacteriaIcon
+                                        :icon="item.icon"
+                                        class="size-4 shrink-0"
+                                        :style="{ color: item.color }"
+                                    />
+                                    <span class="min-w-0">
+                                        <span
+                                            class="block truncate text-sm font-medium"
+                                        >
+                                            {{ item.name }}
+                                        </span>
+                                        <span class="tech">
+                                            {{ item.short_name }}
+                                        </span>
+                                    </span>
+                                </span>
+
+                                <Badge
+                                    v-if="item.observation_type === 'level'"
+                                    variant="outline"
+                                    class="uppercase"
+                                >
+                                    {{ item.growth_level }}
+                                </Badge>
+                                <Badge
+                                    v-else
+                                    variant="secondary"
+                                    class="font-mono"
+                                >
+                                    {{ formatCount(item.count) }}
+                                </Badge>
+                            </div>
+                        </div>
+
+                        <div v-if="filter" class="border-t border-border pt-4">
+                            <div
+                                class="flex items-center justify-between gap-3"
+                            >
+                                <p class="tech uppercase">Filter</p>
+                                <FilterBadge :filter="filter" />
+                            </div>
+                            <dl class="mt-2 grid gap-1 text-sm">
+                                <div
+                                    class="flex items-center justify-between gap-3"
+                                >
+                                    <dt class="text-muted-foreground">
+                                        Placed
+                                    </dt>
+                                    <dd class="font-mono">
+                                        {{ filter.placed_week }}
+                                    </dd>
+                                </div>
+                                <div
+                                    class="flex items-center justify-between gap-3"
+                                >
+                                    <dt class="text-muted-foreground">
+                                        This week
+                                    </dt>
+                                    <dd
+                                        v-if="filter.value !== null"
+                                        class="font-mono"
+                                    >
+                                        {{ filter.value }}
+                                    </dd>
+                                    <dd v-else class="text-muted-foreground">
+                                        No reading this week.
+                                    </dd>
+                                </div>
+                            </dl>
+                        </div>
+                    </template>
+                </template>
+            </div>
+
+            <DialogFooter class="items-center border-t border-border pt-4">
+                <DialogClose as-child>
+                    <Button variant="secondary">Close</Button>
+                </DialogClose>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
+</template>
