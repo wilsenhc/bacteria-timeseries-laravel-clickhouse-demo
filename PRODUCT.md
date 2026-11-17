@@ -1,0 +1,60 @@
+# Product
+
+<!-- impeccable:product-schema 1 -->
+
+## Platform
+
+web
+
+## Users
+
+The primary audience is developers evaluating Laravel 13 + Inertia/Vue against a timeseries-heavy analytical workload; they run the demo locally, open the lab map, switch query engines, and read the benchmark and schema notes in `docs/observations/`.
+
+The app's simulated end users are lab technicians and QA / surveillance analysts in food-safety microbiology. Technicians locate a sample on the shelf map and review its weekly bacteria state; analysts scan a whole lab for presence, growth levels, and counts across ISO weeks. Their workflows exist to make the demo believable and performance-real, not because real labs are using the product.
+
+## Product Purpose
+
+Demonstrate how a realistic, domain-shaped analytical UI behaves when the same question — what is each sample+bacterium's state at the end of a selected ISO week — is answered by three different engines: PostgreSQL, a raw ClickHouse scan, and a pre-computed ClickHouse snapshot. Success means an engineer can seed one deterministic dataset, switch engines from the lab map, and see a measured comparison that holds up against the documented methodology.
+
+## Positioning
+
+The demo earns its comparison by shipping the domain with it: a multi-tenant lab hierarchy, ISO-week carry-forward state, and 1.9M bacteria observations generated deterministically, so the engines are benchmarked against real UI work rather than synthetic `SELECT 1` queries. It also records the rejected option — a weekly AggregatingMergeTree rollup that measured 191 ms versus 108 ms for the raw scan — so the performance claim includes a lesson, not just a victory.
+
+## Operating Context
+
+- Local development runs on lerd (default) or Docker with Laravel Sail. Postgres is the application database; ClickHouse is a secondary connection used through `DB::connection('clickhouse')` and is never the default.
+- `DemoStressSeeder` creates 3 organizations across timezones, 9 labs (240, 640, and 1,280 sample places), 19,440 samples, roughly 800,000 observations and about 1.9M bacteria observations. It takes about 8 minutes on a local lerd install and is deterministic/re-runnable.
+- `php artisan ch:load` rebuilds the denormalized ClickHouse replica and weekly snapshot; `php artisan ch:bench` measures engines, with `--scale=5` for synthetic per-lab scaling.
+- Demo accounts (`demo.admin@example.com`, `demo.member@example.com`, password `password`) are attached to each organization with owner, admin, and member roles.
+- The selected organization lives in the server session, so lab URLs never carry an organization id. There is no dashboard page; sign-in and email verification land on `/labs`.
+- Integration tests hit a real ClickHouse server and skip with a message when it is unreachable; CI supplies ClickHouse, Postgres, and Redis as service containers.
+- Scope decisions for the current increment are governed by `docs/observations/iso-29148-srs.md` (SRS-OBS-001).
+
+## Capabilities and Constraints
+
+- Pages: `/` (public atlas landing), `/bacteria` and `/bacteria/{bacteria}` (catalog), `/labs`, `/labs/{lab}` (lab map: a row/shelf/level matrix with one colour-and-shape mark per level, a week selector, and a sample details modal), `/organizations` (manage organizations), plus auth and settings.
+- The lab map engine switch is a header dropdown over PostgreSQL (default), ClickHouse raw, and ClickHouse snapshot; each option shows the last measured state-query time for the current lab and week. Selection persists in the session under `lab_map_engine`; stale values fall back to PostgreSQL.
+- The map does not print sample codes, bacterium names, growth words, or counts: those live in the details modal, which lists the level's samples and loads the selected sample's bacteria on demand.
+- Lab structure is fixed at `rows × shelves_per_row × levels_per_shelf`. Samples are pinned to one level, and weekly state is the latest observation at or before the selected ISO week, carried forward from earlier weeks.
+- Bacteria results are either a qualitative growth level (`high`/`medium`/`low`/`none`) or a non-negative count; a `none`/`0` terminates a cycle.
+- Deliberately out of scope: manual observation creation/edit/delete UI, sample CRUD UI, membership invitation UI, dashboards beyond the lab map, batch readings, native mobile apps, guest access to organization/lab data, soft deletes, non-uniform lab layouts through the UI, and the withdrawn AggregatingMergeTree weekly rollup.
+- ClickHouse writes are limited to the lab map replica; the snapshot is rebuilt by `ch:load`, not updated incrementally.
+
+## Brand Commitments
+
+The product name is Bacteria Timeseries, presented in the UI as a "Foodborne pathogen atlas" with the tagline "Weekly surveillance". Scientific terminology (sample place, row/shelf/level, growth level, ISO week, cycle) is part of the product's voice and should stay precise rather than consumer-friendly.
+
+## Evidence on Hand
+
+- Deterministic dataset and demo accounts defined in `DemoStressSeeder`; no real lab, customer, or production deployment exists, and no customer names, testimonials, compliance certifications, or production metrics may be invented.
+- Measured ClickHouse replica: 1,936,181 raw rows, 294,924 summary rows, 10.5 s load, 18.66 MiB / 5.23 MiB on disk.
+- Measured latency on Lab C: PostgreSQL 753 ms (1x); ClickHouse raw 122 ms (1x) / 311 ms (5x, p95 329 ms); ClickHouse snapshot 41 ms (1x) / 116 ms (5x, p95 142 ms).
+- Root README and `docs/observations/clickhouse.md` carry the reproducible commands; `docs/observations/iso-29148-srs.md` carries requirements and acceptance criteria.
+
+## Product Principles
+
+1. The comparison is the product: every lab feature must make the three-engine question more believable or more measurable, not just add surface.
+2. Show the measurement where the decision happens — engine timings sit next to the switch, not only in a doc.
+3. Realism over volume: a deterministic dataset with a coherent lab hierarchy beats random rows, and it must stay reproducible.
+4. Document the rejected path; a benchmark without its counter-example is marketing.
+5. Keep Postgres the application truth and ClickHouse the analytical replica; never let the demo blur which store owns what.
