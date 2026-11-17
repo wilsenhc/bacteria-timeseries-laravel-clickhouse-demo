@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Console\Commands\ClickHouse;
 
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -8,9 +8,9 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
-#[Signature('ch:health')]
+#[Signature('clickhouse:health')]
 #[Description('Check the ClickHouse analytics connection')]
-class ClickHouseHealthCommand extends Command
+class HealthCommand extends Command
 {
     public function handle(): int
     {

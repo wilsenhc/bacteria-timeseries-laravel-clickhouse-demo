@@ -3,11 +3,13 @@
 use App\Actions\CreateLab;
 use App\Enums\GrowthLevel;
 use App\Models\Bacteria;
+use App\Models\Filter;
 use App\Models\Lab;
 use App\Models\Observation;
 use App\Models\Organization;
 use App\Models\Sample;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /*
@@ -101,4 +103,73 @@ function createObservation(
     ]);
 
     return $observation;
+}
+
+/**
+ * @param  array<int, array{sample: Sample, bacteria: int, observed_at: string, iso_week: int, week_start: string, growth_level: string, count: int, name: string, short_name: string, observation_type: string}>  $states
+ */
+function insertClickHouseStates(string $table, Lab $lab, array $states): void
+{
+    $values = array_map(fn (array $state): string => sprintf(
+        "(%d, %d, %d, '%s', 2026, %d, '%s', '%s', %d, '%s', '%s', '#123456', 'rod', '%s')",
+        $lab->id,
+        $state['sample']->id,
+        $state['bacteria'],
+        $state['observed_at'],
+        $state['iso_week'],
+        $state['week_start'],
+        $state['growth_level'],
+        $state['count'],
+        $state['name'],
+        $state['short_name'],
+        $state['observation_type'],
+    ), $states);
+
+    DB::connection('clickhouse')->statement(sprintf(
+        'INSERT INTO %s (lab_id, sample_id, bacteria_id, observed_at, iso_year, iso_week, week_start, growth_level, `count`, bacteria_name, bacteria_short_name, bacteria_color, bacteria_icon, observation_type) VALUES %s',
+        $table,
+        implode(', ', $values),
+    ));
+}
+
+/**
+ * @param  array<int, array{observed_at: string, week_start: string, value: int}>  $readings
+ */
+function insertClickHouseFilters(
+    string $filterTable,
+    string $filterObservationTable,
+    Filter $filter,
+    array $readings = [],
+): void {
+    DB::connection('clickhouse')->statement(sprintf(
+        "INSERT INTO %s (filter_id, lab_id, sample_id, placed_at, placed_week, placed_iso_year, placed_iso_week) VALUES (%d, %d, %d, '%s', '%s', %d, %d)",
+        $filterTable,
+        $filter->id,
+        $filter->lab_id,
+        $filter->sample_id,
+        $filter->placed_at->utc()->toDateTimeString(),
+        $filter->week_start,
+        $filter->iso_year,
+        $filter->iso_week,
+    ));
+
+    if ($readings === []) {
+        return;
+    }
+
+    $values = array_map(fn (array $reading): string => sprintf(
+        "(%d, %d, %d, '%s', '%s', %d)",
+        $filter->id,
+        $filter->lab_id,
+        $filter->sample_id,
+        $reading['observed_at'],
+        $reading['week_start'],
+        $reading['value'],
+    ), $readings);
+
+    DB::connection('clickhouse')->statement(sprintf(
+        'INSERT INTO %s (filter_id, lab_id, sample_id, observed_at, week_start, value) VALUES %s',
+        $filterObservationTable,
+        implode(', ', $values),
+    ));
 }

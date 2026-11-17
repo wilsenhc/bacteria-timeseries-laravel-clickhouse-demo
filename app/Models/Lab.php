@@ -19,6 +19,7 @@ use Illuminate\Support\Carbon;
  * @property int $row_count
  * @property int $shelves_per_row
  * @property int $levels_per_shelf
+ * @property int $filter_interval
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */

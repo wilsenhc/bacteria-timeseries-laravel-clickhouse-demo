@@ -31,6 +31,7 @@ class ObservationGenerator
     public function __construct(
         private readonly Collection $levelBacteria,
         private readonly Collection $countBacteria,
+        private readonly int $observationScale = 1,
     ) {}
 
     /**
@@ -86,8 +87,10 @@ class ObservationGenerator
             return;
         }
 
-        DB::table('observations')->insert($this->observationBuffer);
-        DB::table('bacteria_observations')->insert($this->bacteriaObservationBuffer);
+        DB::transaction(function (): void {
+            DB::table('observations')->insert($this->observationBuffer);
+            DB::table('bacteria_observations')->insert($this->bacteriaObservationBuffer);
+        });
 
         $this->observationBuffer = [];
         $this->bacteriaObservationBuffer = [];
@@ -179,7 +182,7 @@ class ObservationGenerator
      */
     private function readingTimes(CarbonImmutable $weekStart): array
     {
-        $count = mt_rand(2, 4);
+        $count = mt_rand(2 * max(1, $this->observationScale), 4 * max(1, $this->observationScale));
         $times = [];
 
         while (count($times) < $count) {
@@ -218,6 +221,8 @@ class ObservationGenerator
             $this->bacteriaObservationBuffer[] = [
                 'id' => $this->bacteriaObservationId++,
                 'observation_id' => $observationId,
+                'sample_id' => $sampleId,
+                'observed_at' => $observedAt->utc()->format('Y-m-d H:i:sP'),
                 'bacteria_id' => $bacteriaId,
                 'growth_level' => $result['growth_level'],
                 'count' => $result['count'],

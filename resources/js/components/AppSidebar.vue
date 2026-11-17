@@ -2,6 +2,8 @@
 import { Link } from '@inertiajs/vue3';
 import { Building2, FlaskConical, Microscope } from '@lucide/vue';
 import AppLogo from '@/components/AppLogo.vue';
+import GitHubIcon from '@/components/GitHubIcon.vue';
+import NavFooter from '@/components/NavFooter.vue';
 import NavMain from '@/components/NavMain.vue';
 import NavUser from '@/components/NavUser.vue';
 import OrganizationSwitcher from '@/components/OrganizationSwitcher.vue';
@@ -36,6 +38,14 @@ const mainNavItems: NavItem[] = [
         icon: Microscope,
     },
 ];
+
+const footerNavItems: NavItem[] = [
+    {
+        title: 'GitHub',
+        href: 'https://github.com/wilsenhc/bacteria-timeseries-laravel-clickhouse-demo',
+        icon: GitHubIcon,
+    },
+];
 </script>
 
 <template>
@@ -58,6 +68,7 @@ const mainNavItems: NavItem[] = [
         </SidebarContent>
 
         <SidebarFooter>
+            <NavFooter :items="footerNavItems" />
             <NavUser />
         </SidebarFooter>
     </Sidebar>

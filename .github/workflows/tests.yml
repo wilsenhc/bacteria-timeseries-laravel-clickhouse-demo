@@ -17,7 +17,7 @@ jobs:
       postgres:
         image: postgres:18-alpine
         env:
-          POSTGRES_DB: bacteria_timeseries_laravel_example
+          POSTGRES_DB: testing
           POSTGRES_USER: root
           POSTGRES_PASSWORD: lerd
         ports:
@@ -41,7 +41,7 @@ jobs:
       clickhouse:
         image: clickhouse:26.3
         env:
-          CLICKHOUSE_DB: bacteria_timeseries_laravel_example
+          CLICKHOUSE_DB: bacteria_timeseries_laravel_example_testing
           CLICKHOUSE_USER: lerd
           CLICKHOUSE_PASSWORD: lerd
           CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
@@ -57,13 +57,13 @@ jobs:
       DB_CONNECTION: pgsql
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
-      DB_DATABASE: bacteria_timeseries_laravel_example
+      DB_DATABASE: testing
       DB_USERNAME: root
       DB_PASSWORD: lerd
       REDIS_HOST: 127.0.0.1
       CLICKHOUSE_HOST: 127.0.0.1
       CLICKHOUSE_PORT: 8123
-      CLICKHOUSE_DATABASE: bacteria_timeseries_laravel_example
+      CLICKHOUSE_DATABASE: bacteria_timeseries_laravel_example_testing
       CLICKHOUSE_USERNAME: lerd
       CLICKHOUSE_PASSWORD: lerd
       CLICKHOUSE_HTTPS: false

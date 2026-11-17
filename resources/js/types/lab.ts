@@ -30,11 +30,11 @@ export type LabForm = {
 export type BacteriaObservation = {
     id: number;
     name: string;
-    short_name: string;
+    shortName: string;
     color: string;
     icon: string;
-    observation_type: ObservationType;
-    growth_level: GrowthLevel | null;
+    observationType: ObservationType;
+    growthLevel: GrowthLevel | null;
     count: number | null;
 };
 
@@ -44,7 +44,22 @@ export type SampleSummary = {
     count_count: number;
     highest_level: GrowthLevel | null;
     max_count: number | null;
-    single_bacterium: BacteriaObservation | null;
+    single: {
+        id: number;
+        observation_type: ObservationType;
+        growth_level: GrowthLevel | null;
+        count: number | null;
+    } | null;
+    filter?: SampleFilter;
+};
+
+export type SampleFilter = {
+    value: number | null;
+};
+
+export type SampleFilterDetails = SampleFilter & {
+    placedWeek: string;
+    placedAt: string;
 };
 
 export type LabMapSample = {
@@ -71,8 +86,32 @@ export type LabMapRow = {
     shelves: LabMapShelf[];
 };
 
+export type LabMapEngine = 'pgsql' | 'clickhouse' | 'clickhouse_snapshot';
+
+export type LabMapEngineOption = {
+    value: LabMapEngine;
+    label: string;
+};
+
+export type LabMapTiming = {
+    lab_id: number;
+    week: string;
+    ms: number;
+    samples: number;
+};
+
+export type SampleDetails = {
+    sample: {
+        id: number;
+        code: string;
+    };
+    week: WeekOption;
+    bacteria: BacteriaObservation[];
+    filter: SampleFilterDetails | null;
+};
+
 export type WeekOption = {
     value: string;
     label: string;
-    is_current: boolean;
+    isCurrent: boolean;
 };

@@ -3,7 +3,6 @@
 use App\Http\Controllers\BacteriaController;
 use App\Http\Controllers\LabController;
 use App\Http\Controllers\OrganizationController;
-use App\Http\Controllers\SampleBacteriaController;
 use App\Models\Bacteria;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -23,14 +22,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('labs', [LabController::class, 'index'])->name('labs.index');
     Route::get('labs/create', [LabController::class, 'create'])->name('labs.create');
     Route::post('labs', [LabController::class, 'store'])->name('labs.store');
-    Route::get('labs/{lab}', [LabController::class, 'show'])->name('labs.show');
+    Route::post('labs/engine', [LabController::class, 'engine'])->name('labs.engine');
+    Route::match(['get', 'post'], 'labs/{lab}', [LabController::class, 'show'])->name('labs.show');
     Route::get('labs/{lab}/edit', [LabController::class, 'edit'])->name('labs.edit');
     Route::patch('labs/{lab}', [LabController::class, 'update'])->name('labs.update');
     Route::delete('labs/{lab}', [LabController::class, 'destroy'])->name('labs.destroy');
-
-    Route::get('labs/{lab}/samples/{sample}/bacteria', SampleBacteriaController::class)
-        ->scopeBindings()
-        ->name('labs.samples.bacteria');
 
     Route::get('organizations', [OrganizationController::class, 'index'])->name('organizations.index');
     Route::get('organizations/create', [OrganizationController::class, 'create'])->name('organizations.create');

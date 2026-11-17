@@ -19,15 +19,25 @@ class DemoStressSeeder extends Seeder
     private const RANDOM_SEED = 20261112;
 
     /**
-     * One small, one medium, and one large lab per organization: 2,160 sample
-     * places in total, which is three times the original 720-place dataset.
+     * Multiplier for readings per sample per week. The normal demo seed uses 1;
+     * `demo:seed --scale=10` produces the 100M-row stress dataset.
+     */
+    public function __construct(
+        private readonly int $observationScale = 1,
+    ) {}
+
+    /**
+     * One small, one medium, and one large lab per organization: 10,800 sample
+     * places in total, five times the previous 2,160-place dataset. Every
+     * dimension stays within the 1–20 limit, so each lab is also valid through
+     * the normal create form.
      *
      * @var array<int, array{letter: string, rows: int, shelves: int, levels: int}>
      */
     private const LAB_PROFILES = [
-        ['letter' => 'A', 'rows' => 5, 'shelves' => 6, 'levels' => 8],    // 240 sample places
-        ['letter' => 'B', 'rows' => 8, 'shelves' => 8, 'levels' => 10],   // 640 sample places
-        ['letter' => 'C', 'rows' => 8, 'shelves' => 10, 'levels' => 16],  // 1,280 sample places
+        ['letter' => 'A', 'rows' => 10, 'shelves' => 10, 'levels' => 12], // 1,200 sample places (5x 240)
+        ['letter' => 'B', 'rows' => 20, 'shelves' => 10, 'levels' => 16], // 3,200 sample places (5x 640)
+        ['letter' => 'C', 'rows' => 20, 'shelves' => 20, 'levels' => 16], // 6,400 sample places (5x 1,280)
     ];
 
     /**
@@ -44,7 +54,7 @@ class DemoStressSeeder extends Seeder
         $users = $this->ensureUsers();
         $levelBacteria = Bacteria::query()->where('observation_type', 'level')->get();
         $countBacteria = Bacteria::query()->where('observation_type', 'count')->get();
-        $generator = new ObservationGenerator($levelBacteria, $countBacteria);
+        $generator = new ObservationGenerator($levelBacteria, $countBacteria, $this->observationScale);
 
         $organizations = [
             [
@@ -71,14 +81,18 @@ class DemoStressSeeder extends Seeder
             $organization = $this->createOrganization($organizationData, $users);
 
             foreach (self::LAB_PROFILES as $profile) {
-                // One transaction per lab: thousands of buffers would otherwise pay a commit each.
-                DB::transaction(fn () => $this->createLab($organization, $profile, $generator));
+                // The hierarchy commits once per lab; observations commit in 1,000-row chunks.
+                $this->createLab($organization, $profile, $generator);
                 $output?->progressAdvance();
             }
         }
 
         $generator->flush();
         $this->resetObservationSequences();
+
+        $this->call(FilterSeeder::class);
+
+        DB::statement('ANALYZE bacteria_observations');
 
         $output?->progressFinish();
 
@@ -187,12 +201,14 @@ class DemoStressSeeder extends Seeder
             'updated_at' => $labCreatedAt,
         ])->saveQuietly();
 
-        $sampleIds = $this->createHierarchyAndSamples($lab);
+        $sampleIds = DB::transaction(fn (): array => $this->createHierarchyAndSamples($lab));
         $weeks = $this->observationWeeks($lab, $timezone);
 
         foreach ($sampleIds as $sampleId) {
             $generator->generateForSample($sampleId, $weeks, $timezone);
         }
+
+        $generator->flush();
     }
 
     /**
