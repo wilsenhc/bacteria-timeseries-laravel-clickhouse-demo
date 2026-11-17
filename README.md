@@ -63,13 +63,14 @@ engine on the current lab and week.
 Load the ClickHouse replica after rebuilding the PostgreSQL demo data:
 
 ```bash
-php artisan db:seed --class=DemoStressSeeder
+php artisan demo:seed
 php artisan ch:load
 ```
 
-`ch:load` rebuilds the denormalized `lab_observations` MergeTree table and the
-`lab_weekly_summaries` snapshot, using ClickHouse's `postgresql()` table function for the
-federated copy and one `INSERT ... SELECT` per week for the snapshot.
+`ch:load` rebuilds the denormalized `lab_observations` MergeTree table, the `lab_filters`
+and `lab_filter_observations` tables, and the `lab_weekly_summaries` snapshot, using
+ClickHouse's `postgresql()` table function for the federated copy and one `INSERT ...
+SELECT` per week for the snapshot.
 
 Benchmark the engines (and optionally a synthetic 5x per-lab dataset):
 
@@ -101,10 +102,28 @@ The observations module adds organizations, labs, a fixed row/shelf/level hierar
 `DemoStressSeeder` is explicit and destructive to demo organizations, labs, samples, and observations. It preserves users and the bacteria catalog.
 
 ```bash
-php artisan db:seed --class=DemoStressSeeder
+php artisan demo:seed
 ```
 
-It creates 3 organizations in different timezones, 9 labs of three sizes (10×10×12, 20×10×16, and 20×20×16 rows × shelves × levels, giving 1,200, 3,200, and 6,400 sample places), 97,200 samples, 4,434,752 observations, and 10,606,888 bacteria observations. It also places 972 filters (1% of samples: 36, 96, and 192 per lab) with 8,333 weekly filter readings; a filter's location and first placed week are permanent, and its value does not carry over to the next week. On a local lerd install the seed takes about 47 minutes and peaks around 43 MB of memory. The seeder is deterministic and can be re-run. It attaches the existing user and two demo users (`demo.admin@example.com`, `demo.member@example.com`) to each organization with owner, admin, and member roles; the demo users use the password `password`.
+It creates 3 organizations in different timezones, 9 labs of three sizes (10×10×12, 20×10×16, and 20×20×16 rows × shelves × levels, giving 1,200, 3,200, and 6,400 sample places), 97,200 samples, 4,434,752 observations, and 10,606,888 bacteria observations. It also places 972 filters (1% of samples: 36, 96, and 192 per lab) with 8,333 weekly filter readings; a filter's location and first placed week are permanent, and its value does not carry over to the next week. On a local lerd install the normal seed takes about 47 minutes and peaks around 43 MB of memory. The seeder is deterministic and can be re-run. It attaches the existing user and two demo users (`demo.admin@example.com`, `demo.member@example.com`) to each organization with owner, admin, and member roles; the demo users use the password `password`.
+
+### 10x stress dataset
+
+To test the raw-query limit, scale the readings per sample per week:
+
+```bash
+php artisan demo:seed --scale=10
+php artisan ch:load
+```
+
+This keeps the same 97,200 samples and 26-week window but generates 20–40 readings per sample
+per week instead of 2–4, producing roughly **44M observations** and **106M bacteria
+observations**. PostgreSQL grows to about 20 GB; the ClickHouse raw table grows to about 1 GB.
+Budget roughly 8 hours for the seed on the local environment.
+
+The seeder commits the hierarchy once per lab and observation batches in 1,000-observation
+chunks, so a 10x run does not hold one giant transaction. ClickHouse is not touched until
+`ch:load` at the end.
 
 ### Pages
 

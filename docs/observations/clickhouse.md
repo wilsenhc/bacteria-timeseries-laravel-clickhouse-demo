@@ -130,6 +130,15 @@ Measured on the deterministic stress dataset:
 | Filter readings on-disk size | 95.75 KiB                                 |
 | Summary on-disk size         | 21.62 MiB                                 |
 
+These are the normal dataset numbers. A 10x stress profile is available with
+`php artisan demo:seed --scale=10`: it keeps the same samples and weeks but
+generates 20–40 readings per sample per week, producing about 44M observations
+and 106M bacteria observations (PostgreSQL ~20 GB, ClickHouse raw ~1 GB). The
+summary snapshot stays at ~1.54M rows because it is per sample/week. The seed
+takes roughly 8 hours; run `ch:load` afterward. The 100M rows are across the
+whole replica, so the largest lab has ~19M raw rows and a per-lab query scans
+that lab's rows only.
+
 Rebuild PostgreSQL first, then ClickHouse:
 
 ```bash
