@@ -12,11 +12,11 @@ summaries from all engines.
 
 There are exactly three engines:
 
-| Engine              | What it reads                                              | Role                                  |
-| ------------------- | ---------------------------------------------------------- | ------------------------------------- |
-| PostgreSQL          | `observations` + `bacteria_observations` via `DISTINCT ON` | Default and reference.                |
-| ClickHouse raw      | `lab_observations` with `argMax`                           | The simple ClickHouse implementation. |
-| ClickHouse snapshot | `lab_weekly_summaries` with a direct week lookup           | The fast ClickHouse implementation.   |
+| Engine              | What it reads                                                | Role                                  |
+| ------------------- | ------------------------------------------------------------ | ------------------------------------- |
+| PostgreSQL          | `observations` + `bacteria_observations` via the state index | Default and reference.                |
+| ClickHouse raw      | `lab_observations` with `argMax`                             | The simple ClickHouse implementation. |
+| ClickHouse snapshot | `lab_weekly_summaries` with a direct week lookup             | The fast ClickHouse implementation.   |
 
 The sample details modal uses the selected engine; the snapshot engine delegates
 its per-sample query to the raw engine because the snapshot only stores the
@@ -107,7 +107,7 @@ UTC; `DateTime64(6)` therefore stores UTC wall-clock values.
 | `LowCardinality(String)`                        | Bacteria metadata and observation type     | Dictionary-encodes repeated strings.                                        |
 | `Enum8`                                         | `growth_level`                             | One byte per state; the numeric order makes `max()` mean the highest level. |
 | `DateTime64(6)` and `Date`                      | Timestamps and `week_start`                | Microsecond ordering plus a cheap date filter; the server is UTC.           |
-| `argMax(value, version)`                        | Raw current-state query and snapshot build | Latest value by timestamp, replacing PostgreSQL's `DISTINCT ON`.            |
+| `argMax(value, version)`                        | Raw current-state query and snapshot build | Latest value by timestamp, replacing PostgreSQL's per-bacterium lookup.     |
 | `countIf`, `maxIf`, `anyIf`                     | Per-sample summary                         | Conditional aggregates build the map row inside ClickHouse.                 |
 | `PREWHERE`                                      | Raw query and snapshot build               | Reads the `lab_id` filter column first.                                     |
 | `postgresql()` table function                   | `php artisan ch:load`                      | Copies and enriches the Postgres data without export files.                 |
@@ -121,8 +121,9 @@ UTC; `DateTime64(6)` therefore stores UTC wall-clock values.
 php artisan ch:load
 ```
 
-The command applies pending migrations, truncates the replica tables, and
-reloads them. It first runs one federated insert into the raw table:
+The command checks that the four ClickHouse tables exist (run
+`php artisan migrate` first), truncates the replica tables, and reloads them.
+It first runs one federated insert into the raw table:
 
 ```sql
 INSERT INTO lab_observations
@@ -159,28 +160,31 @@ table up to that week and stores the final per-sample payload as plain columns;
 filters placed by that week are left joined, and filter-only samples are inserted
 separately. Empty carry-forward weeks are included.
 
-Measured on the deterministic stress dataset:
+Measured on the 10x stress profile (`php artisan demo:seed --scale=10`):
 
-| Metric                       | Result                                    |
-| ---------------------------- | ----------------------------------------- |
-| Raw rows                     | 10,606,888                                |
-| Filter placements            | 972                                       |
-| Filter readings              | 8,333                                     |
-| Summary rows                 | 1,540,144                                 |
-| Load time                    | 24.5 s, including 12.5 s for the snapshot |
-| Raw on-disk size             | 102.83 MiB                                |
-| Filter on-disk size          | 15.83 KiB                                 |
-| Filter readings on-disk size | 95.75 KiB                                 |
-| Summary on-disk size         | 21.62 MiB                                 |
+| Metric                       | Result                                     |
+| ---------------------------- | ------------------------------------------ |
+| Raw rows                     | 100,819,998                                |
+| Filter placements            | 972                                        |
+| Filter readings              | 7,906                                      |
+| Summary rows                 | 1,537,147                                  |
+| Load time                    | 137.3 s, including 31.7 s for the snapshot |
+| Raw on-disk size             | 762.51 MiB                                 |
+| Filter on-disk size          | 16.98 KiB                                  |
+| Filter readings on-disk size | 99.55 KiB                                  |
+| Summary on-disk size         | 21.82 MiB                                  |
 
-These are the normal dataset numbers. A 10x stress profile is available with
-`php artisan demo:seed --scale=10`: it keeps the same samples and weeks but
-generates 20–40 readings per sample per week, producing about 44M observations
-and 106M bacteria observations (PostgreSQL ~20 GB, ClickHouse raw ~1 GB). The
-summary snapshot stays at ~1.54M rows because it is per sample/week. The seed
-takes roughly 8 hours; run `ch:load` afterward. The 100M rows are across the
-whole replica, so the largest lab has ~19M raw rows and a per-lab query scans
-that lab's rows only.
+The raw insert uses a `grace_hash` join with a 1 GiB join memory cap, so the
+100M-row federated join stays inside ClickHouse's default query memory limit.
+
+The normal seed keeps the same 97,200 samples and 26-week window with 2–4
+readings per sample per week: 4,434,752 observations, 10,606,888 bacteria
+observations, 1,540,144 summary rows, a 24.5 s load (12.5 s snapshot), 102.83
+MiB raw and 21.62 MiB summary. The 10x profile generates 20–40 readings per
+sample per week, producing 43.6M observations and 100.8M bacteria observations
+(PostgreSQL 20 GB). The seed takes about 7.7 hours; run `ch:load` afterward. The
+100M rows are across the whole replica, so the largest lab has ~20M raw rows and
+a per-lab query scans that lab's rows only.
 
 Rebuild PostgreSQL first, then ClickHouse:
 
@@ -341,60 +345,64 @@ php artisan ch:bench --iterations=5
 php artisan ch:bench --scale=5 --iterations=5
 ```
 
-`ch:bench` measures the engines for the largest lab. `--scale=5` builds synthetic
-per-lab 5x tables (five copies with shifted sample ids) for the two ClickHouse
-engines. It does not re-seed PostgreSQL.
+`ch:bench` measures the engines for the largest lab. `--scale=5` uses the
+migration-created bench tables (five copies with shifted sample ids) for the two
+ClickHouse engines; it truncates and fills them and does not re-seed PostgreSQL.
 
-Measured on Lab C (1x = 19,200 samples; 5x = 96,000 samples, 80,000 present
-summaries):
+Measured on Lab C over the 10x dataset (1x = 19,200 samples; 5x = 96,000
+samples, 80,215 present summaries):
 
-| Engine              | 1x median  | 5x median  | 5x p95     |
-| ------------------- | ---------- | ---------- | ---------- |
-| PostgreSQL          | 4,745 ms   | —          | —          |
-| ClickHouse raw      | 258 ms     | 1,193 ms   | 1,508 ms   |
-| ClickHouse snapshot | **112 ms** | **390 ms** | **405 ms** |
+| Engine              | 1x median  | 1x p95     | 5x median  | 5x p95     |
+| ------------------- | ---------- | ---------- | ---------- | ---------- |
+| PostgreSQL          | 8,053 ms   | 8,176 ms   | —          | —          |
+| ClickHouse raw      | 878 ms     | 951 ms     | 3,946 ms   | 4,085 ms   |
+| ClickHouse snapshot | **144 ms** | **165 ms** | **656 ms** | **693 ms** |
 
-At 1x the snapshot is ~42x faster than PostgreSQL and ~2.3x faster than the raw
-ClickHouse scan. At synthetic 5x it is ~3x faster than raw and stays around
-400 ms at p95. The loaded dataset itself is 5x the previous 19,440-sample
-dataset (97,200 samples across nine labs); `--scale=5` additionally duplicates
-the largest lab to 96,000 samples for a per-lab stress query.
+At 1x the snapshot is ~56x faster than PostgreSQL and ~6.1x faster than the raw
+ClickHouse scan. At synthetic 5x it is ~6x faster than raw. The loaded dataset
+is the 10x profile (97,200 samples across nine labs, ~100M raw rows);
+`--scale=5` additionally duplicates the largest lab to 96,000 samples for a
+per-lab stress query. The PostgreSQL full-lab query dropped from 68 s to 8.05 s
+after the denormalized state index.
 
 ## The page path
 
-The engine timer measures only the state query. The full page also builds the
-hierarchy, the summaries, and the Inertia payload:
+The page is one Inertia request:
 
-- One left-joined query loads rows, shelves, levels, and samples (including
-  levels with no samples) in hierarchy order. No `Sample`/`LabLevel`/`LabShelf`
-  models are hydrated.
-- That query's sample ids seed the summary map, so the PostgreSQL prefill query
-  and the separate sample-count query are gone.
-- The summary is compact: per sample it stores counts, highest level, max count,
-  and (only for single-bacterium samples) a `single` object with the bacterium id,
-  observation type, growth level, and count. The page does not send a bacterium
-  dictionary; the map renders one mark per level and the details endpoint loads
-  the metadata for the selected sample.
-- Rows and shelves use `content-visibility: auto` with intrinsic-size hints, so
-  off-screen map sections skip layout and paint without paginating the map.
+1. **Structure and summaries.** The visit returns weeks, the selected week, the
+   engine switch, the rows → shelves → levels → samples tree, and the selected
+   week's per-sample summaries as arrays. The server fills an empty summary for
+   every sample and replaces the ones the engine returns.
+2. **Sample details.** Opening a level requests `sampleDetails` through an
+   Inertia optional prop with a POST body. The old JSON endpoint and its `fetch`
+   are gone; all data loading is Inertia.
 
-Measured for Lab C (6,400 levels, 19,200 samples) with the snapshot engine,
-Inertia DevTools off, and SPX off:
+The three engines sit behind `App\Services\LabMap\LabMapService`; the
+PostgreSQL, raw ClickHouse, and snapshot services share the hierarchy, week, and
+summary contract. Modal payloads keep their small DTOs (`BacteriaState`,
+`SampleFilter`, `WeekOption`); summaries stay arrays because the page serializes
+19,200 of them.
 
-| Metric              | Result                                              |
-| ------------------- | --------------------------------------------------- |
-| Server request      | ~780 ms                                             |
-| Browser TTFB / load | ~779 ms / ~989 ms                                   |
-| State query         | ~88–109 ms                                          |
-| Queries             | 10                                                  |
-| Hydrated models     | only user, lab, and organizations; no sample models |
-| PHP memory peak     | ~79 MB                                              |
-| Inertia page JSON   | ~3.37 MB                                            |
-| Map cells rendered  | 6,400 level buttons (19,200 samples)                |
-| Filter levels       | 192 (1% of samples)                                 |
+Measured on Lab C (6,400 levels, 19,200 samples) over the 10x dataset, with
+Inertia DevTools off and SPX off:
 
-The 3,600-sample lab measures ~636 KB, ~337 ms TTFB and ~494 ms load, with 36
-filter levels. Inertia DevTools is disabled in `.env`
+| Metric                                     | Result                                             |
+| ------------------------------------------ | -------------------------------------------------- |
+| Page request (snapshot / raw / PostgreSQL) | ~0.75 s / ~1.6 s / ~10–12 s                        |
+| Payload                                    | ~3.39 MB                                           |
+| Engine query (bench median)                | snapshot 144 ms / raw 878 ms / PostgreSQL 8,053 ms |
+| Map cells rendered                         | 6,400 level buttons (19,200 samples)               |
+| Filter levels                              | 192 (1% of samples)                                |
+
+An async structure-first variant was measured and removed: visible-row
+`summaryBatch` requests plus one deferred full-summary prop made the full
+snapshot map ~4.5 s (1.95 s structure + 2.62 s summaries), and cold PostgreSQL
+row batches reached 39 s, against ~0.75 s for the one-request snapshot page. The
+raw table keeps the `minmax` skip index on `sample_id` from that experiment; the
+page no longer queries row subsets.
+
+The 3,600-sample lab measures ~644 KB, ~239 ms TTFB and ~313 ms load with the
+snapshot engine, with 36 filter levels. Inertia DevTools is disabled in `.env`
 (`INERTIA_DEVTOOLS_ENABLED=false`): in local mode it records the full page and
 serialized every cell, adding seconds on this map. SPX full profiling also adds
 seconds, so it is enabled only for targeted profiles, not left on while

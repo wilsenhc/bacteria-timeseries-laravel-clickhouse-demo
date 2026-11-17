@@ -78,6 +78,12 @@ at runtime, but its migrations require the service when migrating. The tables ha
 models under `app/Models/ClickHouse`; the migrations use the package's `Blueprint` and
 `Schema` builder.
 
+The PostgreSQL map query uses a denormalized `sample_id`/`observed_at` state index on
+`bacteria_observations`. The index is migration-owned; the demo seeder keeps it during bulk
+inserts, so a fresh 10x seed is slower than the pre-index measurement. An existing database
+created before the index runs `php artisan observations:backfill-state` (DML only) and then
+applies the index migration.
+
 Benchmark the engines (and optionally a synthetic 5x per-lab dataset):
 
 ```bash
@@ -89,11 +95,17 @@ The schema, the ClickHouse features used, the query, the snapshot, the benchmark
 measured comparison are in
 [`docs/observations/clickhouse.md`](docs/observations/clickhouse.md).
 
+The lab map is rendered in one Inertia request: the page returns rows, shelves, levels, sample
+ids/codes, and the selected week's per-sample summaries as arrays. The three engines sit behind
+`LabMapService`; the modal's bacterium and filter details load through the `sampleDetails`
+optional prop with a POST body. There is no custom `fetch`/AJAX endpoint. `ch:bench` uses
+migration-created ClickHouse bench tables and only truncates and fills them.
+
 ### Tests
 
 ```bash
 php artisan test --filter=ClickHouseConnectionTest
-php artisan test --filter=ClickHouseLabMapTest
+php artisan test tests/Feature/Support/LabMap
 ```
 
 The integration tests hit a real ClickHouse server and are skipped with a message when the
@@ -105,8 +117,8 @@ curl -u lerd:lerd \
   "http://localhost:8123/?query=CREATE+DATABASE+IF+NOT+EXISTS+bacteria_timeseries_laravel_example_testing"
 ```
 
-CI starts ClickHouse, Postgres and Redis as service containers and creates the testing
-database before running the tests.
+CI starts ClickHouse, Postgres and Redis as service containers with the testing
+databases already configured.
 
 ## Observations
 
@@ -132,9 +144,12 @@ php artisan ch:load
 ```
 
 This keeps the same 97,200 samples and 26-week window but generates 20–40 readings per sample
-per week instead of 2–4, producing roughly **44M observations** and **106M bacteria
-observations**. PostgreSQL grows to about 20 GB; the ClickHouse raw table grows to about 1 GB.
-Budget roughly 8 hours for the seed on the local environment.
+per week instead of 2–4, producing **43,647,057 observations** and **100,819,998 bacteria
+observations**. PostgreSQL grows to 44 GB after the state-column backfill (20 GB before); the
+ClickHouse raw table loads in 137.3 s (31.7 s of that is the snapshot) and occupies 762.51 MiB.
+The seed takes about 7.7 hours on the local environment. The PostgreSQL full-lab query is
+8.05 s at this scale, so the one-request map page takes ~10–12 s on PostgreSQL; the ClickHouse
+snapshot page takes ~0.75 s.
 
 The seeder commits the hierarchy once per lab and observation batches in 1,000-observation
 chunks, so a 10x run does not hold one giant transaction. ClickHouse is not touched until

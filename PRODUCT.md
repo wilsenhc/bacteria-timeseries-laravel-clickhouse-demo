@@ -18,12 +18,12 @@ Demonstrate how a realistic, domain-shaped analytical UI behaves when the same q
 
 ## Positioning
 
-The demo earns its comparison by shipping the domain with it: a multi-tenant lab hierarchy, ISO-week carry-forward state, and 1.9M bacteria observations generated deterministically, so the engines are benchmarked against real UI work rather than synthetic `SELECT 1` queries. It also records the rejected option — a weekly AggregatingMergeTree rollup that measured 191 ms versus 108 ms for the raw scan — so the performance claim includes a lesson, not just a victory.
+The demo earns its comparison by shipping the domain with it: a multi-tenant lab hierarchy, ISO-week carry-forward state, and a deterministic dataset of over 10M bacteria observations (scalable to 100M), so the engines are benchmarked against real UI work rather than synthetic `SELECT 1` queries. It also records the rejected option — a weekly AggregatingMergeTree rollup that measured 191 ms versus 108 ms for the raw scan — so the performance claim includes a lesson, not just a victory.
 
 ## Operating Context
 
 - Local development runs on lerd (default) or Docker with Laravel Sail. Postgres is the application database; ClickHouse is a secondary connection used through `DB::connection('clickhouse')` and is never the default.
-- `DemoStressSeeder` creates 3 organizations across timezones, 9 labs (240, 640, and 1,280 sample places), 19,440 samples, roughly 800,000 observations and about 1.9M bacteria observations. It takes about 8 minutes on a local lerd install and is deterministic/re-runnable.
+- `DemoStressSeeder` creates 3 organizations across timezones, 9 labs (1,200, 3,200, and 6,400 sample places), 97,200 samples, and, in the normal seed, roughly 4.4M observations with about 10.6M bacteria observations. `--scale=10` produces 43,647,057 observations and 100,819,998 bacteria observations; the full-scale seed takes about 7.7 hours. Both are deterministic and re-runnable.
 - `php artisan ch:load` rebuilds the denormalized ClickHouse replica and weekly snapshot; `php artisan ch:bench` measures engines, with `--scale=5` for synthetic per-lab scaling.
 - Demo accounts (`demo.admin@example.com`, `demo.member@example.com`, password `password`) are attached to each organization with owner, admin, and member roles.
 - The selected organization lives in the server session, so lab URLs never carry an organization id. There is no dashboard page; sign-in and email verification land on `/labs`.
@@ -47,8 +47,8 @@ The product name is Bacteria Timeseries, presented in the UI as a "Foodborne pat
 ## Evidence on Hand
 
 - Deterministic dataset and demo accounts defined in `DemoStressSeeder`; no real lab, customer, or production deployment exists, and no customer names, testimonials, compliance certifications, or production metrics may be invented.
-- Measured ClickHouse replica: 1,936,181 raw rows, 294,924 summary rows, 10.5 s load, 18.66 MiB / 5.23 MiB on disk.
-- Measured latency on Lab C: PostgreSQL 753 ms (1x); ClickHouse raw 122 ms (1x) / 311 ms (5x, p95 329 ms); ClickHouse snapshot 41 ms (1x) / 116 ms (5x, p95 142 ms).
+- Measured ClickHouse replica (10x profile): 100,819,998 raw rows, 972 filter placements, 7,906 filter readings, 1,537,147 summary rows; 762.51 MiB raw and 21.82 MiB summary on disk; 137.3 s load including the 31.7 s snapshot build.
+- Measured latency on Lab C: PostgreSQL 8,053 ms (p95 8,176 ms); ClickHouse raw 878 ms (p95 951 ms) / 3,946 ms synthetic 5x (p95 4,085 ms); ClickHouse snapshot 144 ms (p95 165 ms) / 656 ms synthetic 5x (p95 693 ms). The one-request map page returns the largest lab in ~0.75 s with the snapshot engine, ~1.6 s with raw ClickHouse, and ~8–12 s with PostgreSQL (engine query 8,053 ms median); the payload is ~3.39 MB.
 - Root README and `docs/observations/clickhouse.md` carry the reproducible commands; `docs/observations/iso-29148-srs.md` carries requirements and acceptance criteria.
 
 ## Product Principles
