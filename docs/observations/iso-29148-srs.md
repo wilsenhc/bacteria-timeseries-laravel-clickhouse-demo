@@ -29,6 +29,7 @@
 | 1.7     | 2026-11-17 | Engineering | Lab map page path: flat hierarchy query, compact summaries plus bacteria dictionary, no prefill query, content-visibility; refreshed benchmarks and payload sizes                      |
 | 1.8     | 2026-11-17 | Engineering | Lab map reworked as a row/shelf/level matrix: one colour-and-shape mark per level, sample codes and counts moved to a details modal, bacteria dictionary removed from the page payload |
 | 1.9     | 2026-11-17 | Engineering | Added static Filter sampling: permanent per-sample placements, weekly non-carrying readings, yellow map badge, modal Filter section, ClickHouse filter tables and 5x dataset           |
+| 1.10    | 2026-11-17 | Engineering | Moved ClickHouse schema into package Blueprint migrations and Eloquent models; ch:load now migrates, truncates, and reloads                                                            |
 
 ### Table of contents
 
@@ -615,24 +616,27 @@ The 100M rows are across the whole replica. The largest lab has ~19M raw rows, s
 
 ### 4.11 ClickHouse lab map engine
 
-| ID        | Requirement                                                                                                                                                                                     | Priority | Verification        | Source   |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------- | -------- |
-| FR-CH-001 | The system shall store a denormalized `lab_observations` MergeTree table in ClickHouse with lab, sample, bacterium, timestamp, ISO week, week start, growth result, and bacterium metadata.     | Must     | Inspection          | D37      |
-| FR-CH-002 | The system shall rebuild the ClickHouse raw table, filter tables, and summary snapshot from PostgreSQL with the `php artisan ch:load` command using ClickHouse's `postgresql()` table function. | Must     | Demonstration       | D37, D41 |
-| FR-CH-003 | The ClickHouse engine shall compute each sample+bacterium's current state with `argMax(value, observed_at)` filtered to the selected week start or earlier.                                     | Must     | Test                | D37      |
-| FR-CH-004 | The ClickHouse engine shall compute the per-sample summary with conditional aggregates (`countIf`, `maxIf`, `anyIf`) and return the same shape as the PostgreSQL engine.                        | Must     | Test                | D37      |
-| FR-CH-005 | The sample bacteria endpoint shall use the currently selected engine.                                                                                                                           | Must     | Test                | D38      |
-| FR-CH-006 | The lab map shall offer a PostgreSQL / ClickHouse raw / ClickHouse snapshot switch that stores the selection in the server-side session and defaults to PostgreSQL.                             | Must     | Test, Demonstration | D38      |
-| FR-CH-007 | The lab map shall display the measured state-query time for each engine for the current lab and week.                                                                                           | Should   | Demonstration       | D38      |
-| FR-CH-008 | A ClickHouse query failure shall show an error on the lab map without changing the PostgreSQL engine.                                                                                           | Should   | Test                | D38      |
-| FR-CH-009 | The system shall maintain a `lab_weekly_summaries` snapshot with one plain row per sample with present bacteria or a placed filter per week, built from the raw observation and filter tables.  | Must     | Test, Inspection    | D41      |
-| FR-CH-010 | The ClickHouse snapshot engine shall return the same summaries through a direct `lab_id + week_start` read and delegate the sample details modal to the raw engine.                             | Must     | Test                | D41      |
-| FR-CH-011 | The system shall provide a `ch:bench` command that measures each engine and supports a synthetic 5x per-lab scale for the ClickHouse engines.                                                   | Should   | Demonstration       | D42      |
+| ID        | Requirement                                                                                                                                                                                                   | Priority | Verification        | Source        |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------- | ------------- |
+| FR-CH-001 | The system shall store a denormalized `lab_observations` MergeTree table in ClickHouse with lab, sample, bacterium, timestamp, ISO week, week start, growth result, and bacterium metadata.                   | Must     | Inspection          | D37           |
+| FR-CH-002 | The system shall truncate the ClickHouse replica tables and rebuild them from PostgreSQL with the `php artisan ch:load` command using ClickHouse's `postgresql()` table function.                             | Must     | Demonstration       | D37, D41, D45 |
+| FR-CH-003 | The ClickHouse engine shall compute each sample+bacterium's current state with `argMax(value, observed_at)` filtered to the selected week start or earlier.                                                   | Must     | Test                | D37           |
+| FR-CH-004 | The ClickHouse engine shall compute the per-sample summary with conditional aggregates (`countIf`, `maxIf`, `anyIf`) and return the same shape as the PostgreSQL engine.                                      | Must     | Test                | D37           |
+| FR-CH-005 | The sample bacteria endpoint shall use the currently selected engine.                                                                                                                                         | Must     | Test                | D38           |
+| FR-CH-006 | The lab map shall offer a PostgreSQL / ClickHouse raw / ClickHouse snapshot switch that stores the selection in the server-side session and defaults to PostgreSQL.                                           | Must     | Test, Demonstration | D38           |
+| FR-CH-007 | The lab map shall display the measured state-query time for each engine for the current lab and week.                                                                                                         | Should   | Demonstration       | D38           |
+| FR-CH-008 | A ClickHouse query failure shall show an error on the lab map without changing the PostgreSQL engine.                                                                                                         | Should   | Test                | D38           |
+| FR-CH-009 | The system shall maintain a `lab_weekly_summaries` snapshot with one plain row per sample with present bacteria or a placed filter per week, built from the raw observation and filter tables.                | Must     | Test, Inspection    | D41           |
+| FR-CH-010 | The ClickHouse snapshot engine shall return the same summaries through a direct `lab_id + week_start` read and delegate the sample details modal to the raw engine.                                           | Must     | Test                | D41           |
+| FR-CH-011 | The system shall provide a `ch:bench` command that measures each engine and supports a synthetic 5x per-lab scale for the ClickHouse engines.                                                                 | Should   | Demonstration       | D42           |
+| FR-CH-012 | The ClickHouse schema shall be defined in versioned migrations under `database/migrations` using the package Blueprint and applied by `php artisan migrate`; `ch:load` shall check the schema before loading. | Must     | Inspection, Test    | D45           |
 
 **Notes**
 
 - The ClickHouse tables are read-only replicas. PostgreSQL remains the source of truth and the only write path.
-- The load command drops and recreates the raw table, the filter tables, and the summary snapshot; it is run explicitly after re-seeding PostgreSQL.
+- The load command truncates the raw, filter, and summary tables and reloads them; it is run explicitly after re-seeding PostgreSQL.
+- ClickHouse migrations live in the regular `database/migrations` directory with `protected $connection = 'clickhouse'`; `php artisan migrate` runs them alongside the PostgreSQL migrations, so ClickHouse must be running when migrating. The migrations drop and recreate their tables, which is the adoption path from old loader-created tables.
+- The loader/snapshot DML is inline in `LoadLabObservationsCommand`. The four tables have Eloquent models under `App\Models\ClickHouse`.
 - The ClickHouse engines and the PostgreSQL engine must return identical summaries and sample payloads. The automated tests compare them on small fixtures; the seeded dataset was checked exhaustively (452 summary checks across all labs/weeks and 1,620 drawer checks, zero mismatches).
 - The raw table has 10,606,888 rows and 102.83 MiB on disk; the filter table has 972 rows and 15.83 KiB, filter readings have 8,333 rows and 95.75 KiB, and the summary snapshot has 1,540,144 rows and 21.62 MiB.
 - The benchmark measured 1x medians of PostgreSQL 4,745 ms, ClickHouse raw 258 ms, and snapshot 112 ms (118 ms p95). On synthetic per-lab 5x data: raw 1,193 ms (1,508 ms p95), snapshot 390 ms (405 ms p95).
@@ -1374,52 +1378,53 @@ Then the page shows an error and the PostgreSQL engine still works.
 
 ### 11.1 Source decisions
 
-| ID  | Decision                                                                                                              |
-| --- | --------------------------------------------------------------------------------------------------------------------- |
-| D1  | The three dimensions are named Row, Shelf, and Level.                                                                 |
-| D2  | The dimensions are modeled as three hierarchy tables: `lab_rows` → `lab_shelves` → `lab_levels`.                      |
-| D3  | Samples have a generated code and are fixed to their level for life.                                                  |
-| D4  | Observations are raw readings: one parent reading with many bacteria results.                                         |
-| D5  | ISO year and week are stored, computed in the organization timezone.                                                  |
-| D6  | Level bacteria use `growth_level` with `high`, `medium`, `low`, `none`.                                               |
-| D7  | Count observations use a nullable count with a catalog flag; superseded by D18/D19 for the final split.               |
-| D8  | Users belong to organizations; tenancy is scoped by membership.                                                       |
-| D9  | Organization address is a single text field.                                                                          |
-| D10 | Lab fields are name, optional code, and optional notes.                                                               |
-| D11 | PostgreSQL first; ClickHouse is deferred.                                                                             |
-| D12 | `none` is recorded only on a positive-to-absent transition; no rows while absent.                                     |
-| D13 | Weekly state is the latest observation before week end, carried forward.                                              |
-| D14 | Cycles are derived from the event stream, not stored.                                                                 |
-| D15 | Lab structure counts are fixed at creation and immutable.                                                             |
-| D16 | Organization and Lab CRUD are in scope; the lab detail page is the full map.                                          |
-| D17 | Organization roles are owner, admin, and member.                                                                      |
-| D18 | Six level bacteria and four count bacteria.                                                                           |
-| D19 | Count bacteria are count-only; `0` closes a cycle.                                                                    |
-| D20 | Owner all, admin labs, member read-only; any user can create an organization.                                         |
-| D21 | The lab map is a full rows → shelves → levels → samples map with a highest-level summary.                             |
-| D22 | The stress seeder is a dedicated, explicit, destructive demo seeder.                                                  |
-| D23 | Seeding uses the realistic mixed distribution and the larger stress volume.                                           |
-| D24 | The lab map has a week selector.                                                                                      |
-| D25 | Map marks show the level state; the details modal shows sample codes, present counts, and bacterium values.           |
-| D26 | The initial map payload contains summaries; details are lazy-loaded.                                                  |
-| D27 | The current-state query runs on the fly with indexes.                                                                 |
-| D28 | The map layout is rows → shelves → levels.                                                                            |
-| D29 | The week selector starts at the lab creation week; lab creation dates are randomized in the seeder.                   |
-| D30 | The selector runs through the current week and defaults to the current week.                                          |
-| D31 | Seeded labs are created 26–20 weeks ago.                                                                              |
-| D32 | First readings occur after a random 0–4 week delay.                                                                   |
-| D33 | The selected organization lives in the server-side session; lab URLs carry no organization id.                        |
-| D34 | The Dashboard page is removed; sign-in and email verification redirect to Labs.                                       |
-| D35 | Labs and Manage Organizations are separate pages: Labs scopes to the selected organization.                           |
-| D36 | Switching the selected organization redirects to the Labs page.                                                       |
-| D37 | ClickHouse holds a denormalized `MergeTree` lab observation replica; the load uses the `postgresql()` table function. |
-| D38 | The lab map engine is switched per session from the map UI, with measured state-query timings.                        |
-| D39 | PostgreSQL remains the source of truth; ClickHouse is read-only and refreshed by `ch:load`.                           |
-| D40 | The weekly AggregatingMergeTree experiment was removed; the snapshot is built directly from raw observations.         |
-| D41 | The summary snapshot stores the final per-sample/week map payload in a plain MergeTree for a direct point lookup.     |
-| D42 | The benchmark command measures all engines at 1x and the ClickHouse engines on synthetic per-lab 5x tables.           |
-| D43 | A Filter is a separate permanent per-sample sampler: 1% coverage, weekly readings, no carry-over, yellow map badge.   |
-| D44 | A 10x stress profile scales readings per sample/week and commits observation chunks instead of one giant transaction. |
+| ID  | Decision                                                                                                                                                 |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | The three dimensions are named Row, Shelf, and Level.                                                                                                    |
+| D2  | The dimensions are modeled as three hierarchy tables: `lab_rows` → `lab_shelves` → `lab_levels`.                                                         |
+| D3  | Samples have a generated code and are fixed to their level for life.                                                                                     |
+| D4  | Observations are raw readings: one parent reading with many bacteria results.                                                                            |
+| D5  | ISO year and week are stored, computed in the organization timezone.                                                                                     |
+| D6  | Level bacteria use `growth_level` with `high`, `medium`, `low`, `none`.                                                                                  |
+| D7  | Count observations use a nullable count with a catalog flag; superseded by D18/D19 for the final split.                                                  |
+| D8  | Users belong to organizations; tenancy is scoped by membership.                                                                                          |
+| D9  | Organization address is a single text field.                                                                                                             |
+| D10 | Lab fields are name, optional code, and optional notes.                                                                                                  |
+| D11 | PostgreSQL first; ClickHouse is deferred.                                                                                                                |
+| D12 | `none` is recorded only on a positive-to-absent transition; no rows while absent.                                                                        |
+| D13 | Weekly state is the latest observation before week end, carried forward.                                                                                 |
+| D14 | Cycles are derived from the event stream, not stored.                                                                                                    |
+| D15 | Lab structure counts are fixed at creation and immutable.                                                                                                |
+| D16 | Organization and Lab CRUD are in scope; the lab detail page is the full map.                                                                             |
+| D17 | Organization roles are owner, admin, and member.                                                                                                         |
+| D18 | Six level bacteria and four count bacteria.                                                                                                              |
+| D19 | Count bacteria are count-only; `0` closes a cycle.                                                                                                       |
+| D20 | Owner all, admin labs, member read-only; any user can create an organization.                                                                            |
+| D21 | The lab map is a full rows → shelves → levels → samples map with a highest-level summary.                                                                |
+| D22 | The stress seeder is a dedicated, explicit, destructive demo seeder.                                                                                     |
+| D23 | Seeding uses the realistic mixed distribution and the larger stress volume.                                                                              |
+| D24 | The lab map has a week selector.                                                                                                                         |
+| D25 | Map marks show the level state; the details modal shows sample codes, present counts, and bacterium values.                                              |
+| D26 | The initial map payload contains summaries; details are lazy-loaded.                                                                                     |
+| D27 | The current-state query runs on the fly with indexes.                                                                                                    |
+| D28 | The map layout is rows → shelves → levels.                                                                                                               |
+| D29 | The week selector starts at the lab creation week; lab creation dates are randomized in the seeder.                                                      |
+| D30 | The selector runs through the current week and defaults to the current week.                                                                             |
+| D31 | Seeded labs are created 26–20 weeks ago.                                                                                                                 |
+| D32 | First readings occur after a random 0–4 week delay.                                                                                                      |
+| D33 | The selected organization lives in the server-side session; lab URLs carry no organization id.                                                           |
+| D34 | The Dashboard page is removed; sign-in and email verification redirect to Labs.                                                                          |
+| D35 | Labs and Manage Organizations are separate pages: Labs scopes to the selected organization.                                                              |
+| D36 | Switching the selected organization redirects to the Labs page.                                                                                          |
+| D37 | ClickHouse holds a denormalized `MergeTree` lab observation replica; the load uses the `postgresql()` table function.                                    |
+| D38 | The lab map engine is switched per session from the map UI, with measured state-query timings.                                                           |
+| D39 | PostgreSQL remains the source of truth; ClickHouse is read-only and refreshed by `ch:load`.                                                              |
+| D40 | The weekly AggregatingMergeTree experiment was removed; the snapshot is built directly from raw observations.                                            |
+| D41 | The summary snapshot stores the final per-sample/week map payload in a plain MergeTree for a direct point lookup.                                        |
+| D42 | The benchmark command measures all engines at 1x and the ClickHouse engines on synthetic per-lab 5x tables.                                              |
+| D43 | A Filter is a separate permanent per-sample sampler: 1% coverage, weekly readings, no carry-over, yellow map badge.                                      |
+| D44 | A 10x stress profile scales readings per sample/week and commits observation chunks instead of one giant transaction.                                    |
+| D45 | ClickHouse schema is migration-owned via package Blueprint and Eloquent models; `php artisan migrate` runs it, and `ch:load` truncates and reloads data. |
 
 ### 11.2 Requirement-to-design traceability
 
@@ -1433,9 +1438,9 @@ Then the page shows an error and the PostgreSQL engine still works.
 | Observations                 | FR-OBS-001 – FR-OBS-025       | `Observation`, `BacteriaObservation`, enums | Seeder, future ingestion                                                                                                                  | —                                                                              | `ObservationTest`                     |
 | Weekly state and cycles      | FR-WK-001 – FR-WK-010         | `Observation`, `BacteriaObservation`        | `LabMapQuery` / service                                                                                                                   | Map                                                                            | `WeeklyStateTest`                     |
 | Lab map and week selector    | FR-MAP-001 – FR-MAP-032       | —                                           | `LabController@show`, `SampleBacteriaController`                                                                                          | `labs/Show.vue`, map components, details modal                                 | `LabMapTest`                          |
-| Seeding                      | FR-SEED-001 – FR-SEED-027     | All models                                  | `DemoStressSeeder`, `FilterSeeder`, `SeedDemoStressCommand`, generator service                                                            | —                                                                              | `ObservationGeneratorTest`                |
+| Seeding                      | FR-SEED-001 – FR-SEED-027     | All models                                  | `DemoStressSeeder`, `FilterSeeder`, `SeedDemoStressCommand`, generator service                                                            | —                                                                              | `ObservationGeneratorTest`            |
 | Filter sampling              | FR-FILTER-001 – FR-FILTER-010 | `Filter`, `FilterObservation`               | `FilterSeeder`, `LabController@show`, `SampleBacteriaController`, lab map engines                                                         | `FilterBadge.vue`, `LabMapLevel.vue`, `LevelDetailsModal.vue`, `MapLegend.vue` | `LabMapTest`, `ClickHouseLabMapTest`  |
-| ClickHouse lab map engine    | FR-CH-001 – FR-CH-011         | `ClickHouseLabMapTable`                     | `LoadLabObservationsCommand`, `BenchmarkLabMapCommand`, `LabMapEngineManager`, `ClickHouseLabMapEngine`, `ClickHouseSnapshotLabMapEngine` | `labs/LabEngineSwitch.vue`                                                     | `ClickHouseLabMapTest`, `LabPageTest` |
+| ClickHouse lab map engine    | FR-CH-001 – FR-CH-012         | `App\Models\ClickHouse\*`, migrations       | `LoadLabObservationsCommand`, `BenchmarkLabMapCommand`, `LabMapEngineManager`, `ClickHouseLabMapEngine`, `ClickHouseSnapshotLabMapEngine` | `labs/LabEngineSwitch.vue`                                                     | `ClickHouseLabMapTest`, `LabPageTest` |
 | Navigation and UI            | FR-UI-001 – FR-UI-014         | —                                           | —                                                                                                                                         | Sidebar, organization switcher, forms, dialogs                                 | `NavigationTest`, manual              |
 | Data integrity               | FR-DATA-001 – FR-DATA-010     | Migrations, models                          | —                                                                                                                                         | —                                                                              | `SchemaTest`, feature tests           |
 
@@ -1456,52 +1461,53 @@ Each requirement table in Section 4 includes its verification method. The summar
 
 ### Appendix A — Decision log
 
-| ID  | Decision                                                                                                              | Round |
-| --- | --------------------------------------------------------------------------------------------------------------------- | ----- |
-| D1  | Row / Shelf / Level naming.                                                                                           | 1     |
-| D2  | Three hierarchy tables.                                                                                               | 1     |
-| D3  | Sample code + fixed location.                                                                                         | 1     |
-| D4  | Raw readings.                                                                                                         | 1     |
-| D5  | ISO year/week in organization timezone.                                                                               | 1     |
-| D6  | `growth_level` + `none` semantics.                                                                                    | 1     |
-| D7  | Nullable count + catalog flag.                                                                                        | 1     |
-| D8  | Users belong to organizations.                                                                                        | 1     |
-| D9  | Single address field.                                                                                                 | 1     |
-| D10 | Lab name + code + notes.                                                                                              | 1     |
-| D11 | PostgreSQL first, ClickHouse later.                                                                                   | 1     |
-| D12 | `none` transition-only.                                                                                               | 2     |
-| D13 | Weekly state carry-forward.                                                                                           | 2     |
-| D14 | Cycles derived.                                                                                                       | 2     |
-| D15 | Lab counts fixed at creation.                                                                                         | 2     |
-| D16 | Organization + Lab CRUD; lab shows map.                                                                               | 2     |
-| D17 | Roles owner/admin/member.                                                                                             | 2     |
-| D18 | Six level, four count split.                                                                                          | 3     |
-| D19 | Count-only, `0` closes cycle.                                                                                         | 3     |
-| D20 | Permission matrix.                                                                                                    | 3     |
-| D21 | Full lab map with highest-level summary.                                                                              | 3     |
-| D22 | Dedicated stress seeder.                                                                                              | 3     |
-| D23 | Realistic mixed distribution and larger stress volume.                                                                | 3     |
-| D24 | Week selector.                                                                                                        | 4     |
-| D25 | Level mark summary; sample codes and values in the details modal.                                                     | 4     |
-| D26 | Summary payload + lazy details.                                                                                       | 4     |
-| D27 | Query on the fly.                                                                                                     | 4     |
-| D28 | Rows → shelves → levels layout.                                                                                       | 4     |
-| D29 | All weeks since lab creation; randomize lab creation date.                                                            | 5     |
-| D30 | Through current week, default current.                                                                                | 6     |
-| D31 | Seeded labs created 26–20 weeks ago.                                                                                  | 6     |
-| D32 | First readings after 0–4 week delay.                                                                                  | 6     |
-| D33 | Selected organization in the server session.                                                                          | 7     |
-| D34 | Dashboard removed; sign-in redirects to Labs.                                                                         | 7     |
-| D35 | Labs and Manage Organizations are separate pages.                                                                     | 7     |
-| D36 | Organization switch redirects to Labs.                                                                                | 7     |
-| D37 | ClickHouse MergeTree replica, loaded via `postgresql()`.                                                              | 8     |
-| D38 | Per-session lab map engine switch with timings.                                                                       | 8     |
-| D39 | PostgreSQL source of truth; ClickHouse read-only replica.                                                             | 8     |
-| D40 | Weekly AggregatingMergeTree rollup removed; snapshot from raw.                                                        | 8     |
-| D41 | Plain per-sample/week summary snapshot.                                                                               | 9     |
-| D42 | ch:bench with synthetic per-lab 5x scale.                                                                             | 9     |
-| D43 | Separate permanent Filter sampler with weekly, non-carrying values.                                                   | 10    |
-| D44 | A 10x stress profile scales readings per sample/week and commits observation chunks instead of one giant transaction. | 11    |
+| ID  | Decision                                                                                                                                                 | Round |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| D1  | Row / Shelf / Level naming.                                                                                                                              | 1     |
+| D2  | Three hierarchy tables.                                                                                                                                  | 1     |
+| D3  | Sample code + fixed location.                                                                                                                            | 1     |
+| D4  | Raw readings.                                                                                                                                            | 1     |
+| D5  | ISO year/week in organization timezone.                                                                                                                  | 1     |
+| D6  | `growth_level` + `none` semantics.                                                                                                                       | 1     |
+| D7  | Nullable count + catalog flag.                                                                                                                           | 1     |
+| D8  | Users belong to organizations.                                                                                                                           | 1     |
+| D9  | Single address field.                                                                                                                                    | 1     |
+| D10 | Lab name + code + notes.                                                                                                                                 | 1     |
+| D11 | PostgreSQL first, ClickHouse later.                                                                                                                      | 1     |
+| D12 | `none` transition-only.                                                                                                                                  | 2     |
+| D13 | Weekly state carry-forward.                                                                                                                              | 2     |
+| D14 | Cycles derived.                                                                                                                                          | 2     |
+| D15 | Lab counts fixed at creation.                                                                                                                            | 2     |
+| D16 | Organization + Lab CRUD; lab shows map.                                                                                                                  | 2     |
+| D17 | Roles owner/admin/member.                                                                                                                                | 2     |
+| D18 | Six level, four count split.                                                                                                                             | 3     |
+| D19 | Count-only, `0` closes cycle.                                                                                                                            | 3     |
+| D20 | Permission matrix.                                                                                                                                       | 3     |
+| D21 | Full lab map with highest-level summary.                                                                                                                 | 3     |
+| D22 | Dedicated stress seeder.                                                                                                                                 | 3     |
+| D23 | Realistic mixed distribution and larger stress volume.                                                                                                   | 3     |
+| D24 | Week selector.                                                                                                                                           | 4     |
+| D25 | Level mark summary; sample codes and values in the details modal.                                                                                        | 4     |
+| D26 | Summary payload + lazy details.                                                                                                                          | 4     |
+| D27 | Query on the fly.                                                                                                                                        | 4     |
+| D28 | Rows → shelves → levels layout.                                                                                                                          | 4     |
+| D29 | All weeks since lab creation; randomize lab creation date.                                                                                               | 5     |
+| D30 | Through current week, default current.                                                                                                                   | 6     |
+| D31 | Seeded labs created 26–20 weeks ago.                                                                                                                     | 6     |
+| D32 | First readings after 0–4 week delay.                                                                                                                     | 6     |
+| D33 | Selected organization in the server session.                                                                                                             | 7     |
+| D34 | Dashboard removed; sign-in redirects to Labs.                                                                                                            | 7     |
+| D35 | Labs and Manage Organizations are separate pages.                                                                                                        | 7     |
+| D36 | Organization switch redirects to Labs.                                                                                                                   | 7     |
+| D37 | ClickHouse MergeTree replica, loaded via `postgresql()`.                                                                                                 | 8     |
+| D38 | Per-session lab map engine switch with timings.                                                                                                          | 8     |
+| D39 | PostgreSQL source of truth; ClickHouse read-only replica.                                                                                                | 8     |
+| D40 | Weekly AggregatingMergeTree rollup removed; snapshot from raw.                                                                                           | 8     |
+| D41 | Plain per-sample/week summary snapshot.                                                                                                                  | 9     |
+| D42 | ch:bench with synthetic per-lab 5x scale.                                                                                                                | 9     |
+| D43 | Separate permanent Filter sampler with weekly, non-carrying values.                                                                                      | 10    |
+| D44 | A 10x stress profile scales readings per sample/week and commits observation chunks instead of one giant transaction.                                    | 11    |
+| D45 | ClickHouse schema is migration-owned via package Blueprint and Eloquent models; `php artisan migrate` runs it, and `ch:load` truncates and reloads data. | 12    |
 
 ### Appendix B — Example observation timelines
 

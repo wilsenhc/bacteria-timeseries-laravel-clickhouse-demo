@@ -60,17 +60,23 @@ raw denormalized scan), and ClickHouse snapshot (a pre-computed per-sample/week 
 lab map header has a dropdown switch and shows the last measured state-query time for each
 engine on the current lab and week.
 
-Load the ClickHouse replica after rebuilding the PostgreSQL demo data:
+ClickHouse schema is versioned in the regular `database/migrations` directory alongside the
+PostgreSQL migrations; each ClickHouse migration declares the `clickhouse` connection. Run:
 
 ```bash
+php artisan migrate
 php artisan demo:seed
 php artisan ch:load
 ```
 
-`ch:load` rebuilds the denormalized `lab_observations` MergeTree table, the `lab_filters`
-and `lab_filter_observations` tables, and the `lab_weekly_summaries` snapshot, using
-ClickHouse's `postgresql()` table function for the federated copy and one `INSERT ...
-SELECT` per week for the snapshot.
+`php artisan migrate` runs both schemas, so ClickHouse must be running when you migrate. The
+ClickHouse migrations recreate their tables if they already exist from the old loader, so the
+first `migrate` is also the adoption path. `ch:load` then checks the schema, truncates the
+replica tables, and reloads them from PostgreSQL using ClickHouse's `postgresql()` table
+function and one `INSERT ... SELECT` per week for the snapshot. ClickHouse remains optional
+at runtime, but its migrations require the service when migrating. The tables have read
+models under `app/Models/ClickHouse`; the migrations use the package's `Blueprint` and
+`Schema` builder.
 
 Benchmark the engines (and optionally a synthetic 5x per-lab dataset):
 
@@ -91,7 +97,16 @@ php artisan test --filter=ClickHouseLabMapTest
 ```
 
 The integration tests hit a real ClickHouse server and are skipped with a message when the
-service is unreachable. CI starts ClickHouse, Postgres and Redis as service containers.
+service is unreachable. They use a separate ClickHouse database, so the test suite does not
+wipe the development replica. Create it once:
+
+```bash
+curl -u lerd:lerd \
+  "http://localhost:8123/?query=CREATE+DATABASE+IF+NOT+EXISTS+bacteria_timeseries_laravel_example_testing"
+```
+
+CI starts ClickHouse, Postgres and Redis as service containers and creates the testing
+database before running the tests.
 
 ## Observations
 

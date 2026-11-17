@@ -22,6 +22,49 @@ The sample details modal uses the selected engine; the snapshot engine delegates
 its per-sample query to the raw engine because the snapshot only stores the
 map summary, not every bacterium.
 
+## Schema and migrations
+
+ClickHouse schema is versioned like the PostgreSQL schema, in the regular
+`database/migrations` directory. Each ClickHouse migration declares
+`protected $connection = 'clickhouse'` and uses the package's
+`ClickHouse\Laravel\Schema\Blueprint`:
+
+```php
+Schema::connection('clickhouse')->create('lab_observations', function (ClickHouseBlueprint $table) {
+    $table->unsignedBigInteger('lab_id');
+    $table->unsignedBigInteger('sample_id');
+    $table->unsignedBigInteger('bacteria_id');
+    $table->dateTime('observed_at', 6);
+    $table->unsignedSmallInteger('iso_year');
+    $table->unsignedTinyInteger('iso_week');
+    $table->date('week_start');
+    $table->enum('growth_level', ['none', 'low', 'medium', 'high', 'not_applicable']);
+    $table->integer('count');
+    $table->text('bacteria_name')->lowCardinality();
+    // ...
+    $table->engine('MergeTree()');
+    $table->partitionBy('toYear(week_start)');
+    $table->orderBy(['lab_id', 'week_start', 'sample_id', 'bacteria_id']);
+});
+```
+
+Run them with `php artisan migrate`; this runs the PostgreSQL and ClickHouse
+migrations together, so ClickHouse must be running when you migrate. The
+ClickHouse migrations recreate their tables if they already exist from the old
+loader, which makes the first `migrate` the adoption path. `php artisan ch:load`
+then checks the schema, truncates the replica tables, and reloads. The four
+tables have
+Eloquent models in `App\Models\ClickHouse` extending
+`ClickHouse\Laravel\Eloquent\Model`, which provide the table names and casts.
+Bulk federated loads (`postgresql()` + `INSERT ... SELECT`) and the ClickHouse
+aggregate queries remain raw SQL because they are not Eloquent operations. The
+snapshot engine uses the `LabWeeklySummary` model's table and connection through
+the query builder's `toBase()` path, so it does not hydrate one model per
+summary row.
+
+ClickHouse remains optional at runtime, but `php artisan migrate` now requires
+the service because its migrations run alongside the PostgreSQL ones.
+
 ## The raw table
 
 One denormalized table holds everything the map needs:
@@ -31,12 +74,12 @@ CREATE TABLE lab_observations (
     lab_id UInt64,
     sample_id UInt64,
     bacteria_id UInt64,
-    observed_at DateTime64(6, 'UTC') CODEC(Delta, ZSTD(1)),
+    observed_at DateTime64(6),
     iso_year UInt16,
     iso_week UInt8,
     week_start Date,
-    growth_level Enum8('none' = 0, 'low' = 1, 'medium' = 2, 'high' = 3, 'not_applicable' = 4),
-    `count` Int32 CODEC(ZSTD(1)),
+    growth_level Enum8('none', 'low', 'medium', 'high', 'not_applicable'),
+    `count` Int32,
     bacteria_name LowCardinality(String),
     bacteria_short_name LowCardinality(String),
     bacteria_color LowCardinality(String),
@@ -51,7 +94,8 @@ The bacteria metadata is copied into every row, so the map query needs no join.
 `week_start` is the Monday of the observation's ISO week in the organization
 timezone, computed once at load time. There are no `Nullable` columns: a level
 observation stores `-1` in `count`, and a count observation stores
-`not_applicable` in `growth_level`.
+`not_applicable` in `growth_level`. The connection and ClickHouse server use
+UTC; `DateTime64(6)` therefore stores UTC wall-clock values.
 
 ## ClickHouse features used
 
@@ -62,11 +106,10 @@ observation stores `-1` in `count`, and a count observation stores
 | `ORDER BY (lab_id, week_start, sample_id, ...)` | Both tables                                | The primary index starts with `lab_id`, so a map query reads only one lab.  |
 | `LowCardinality(String)`                        | Bacteria metadata and observation type     | Dictionary-encodes repeated strings.                                        |
 | `Enum8`                                         | `growth_level`                             | One byte per state; the numeric order makes `max()` mean the highest level. |
-| `CODEC(Delta, ZSTD(1))` / `CODEC(ZSTD(1))`      | Timestamps and counts                      | Delta encoding for time, compression for counts.                            |
-| `DateTime64(6, 'UTC')` and `Date`               | Timestamps and `week_start`                | Microsecond ordering plus a cheap date filter.                              |
+| `DateTime64(6)` and `Date`                      | Timestamps and `week_start`                | Microsecond ordering plus a cheap date filter; the server is UTC.           |
 | `argMax(value, version)`                        | Raw current-state query and snapshot build | Latest value by timestamp, replacing PostgreSQL's `DISTINCT ON`.            |
 | `countIf`, `maxIf`, `anyIf`                     | Per-sample summary                         | Conditional aggregates build the map row inside ClickHouse.                 |
-| `PREWHERE`                                      | Raw and snapshot queries                   | Reads the `lab_id` filter column first.                                     |
+| `PREWHERE`                                      | Raw query and snapshot build               | Reads the `lab_id` filter column first.                                     |
 | `postgresql()` table function                   | `php artisan ch:load`                      | Copies and enriches the Postgres data without export files.                 |
 | Plain `MergeTree` snapshot                      | `lab_weekly_summaries`                     | Stores the final map payload per sample/week for a direct lookup.           |
 | `system.parts`                                  | `ch:load` output and experiments           | Shows compressed size and parts.                                            |
@@ -78,8 +121,8 @@ observation stores `-1` in `count`, and a count observation stores
 php artisan ch:load
 ```
 
-The command drops and recreates `lab_observations` and
-`lab_weekly_summaries`. It first runs one federated insert into the raw table:
+The command applies pending migrations, truncates the replica tables, and
+reloads them. It first runs one federated insert into the raw table:
 
 ```sql
 INSERT INTO lab_observations
@@ -245,7 +288,7 @@ CREATE TABLE lab_filters (
     filter_id UInt64,
     lab_id UInt64,
     sample_id UInt64,
-    placed_at DateTime64(6, 'UTC'),
+    placed_at DateTime64(6),
     placed_week Date,
     placed_iso_year UInt16,
     placed_iso_week UInt8
@@ -257,7 +300,7 @@ CREATE TABLE lab_filter_observations (
     filter_id UInt64,
     lab_id UInt64,
     sample_id UInt64,
-    observed_at DateTime64(6, 'UTC'),
+    observed_at DateTime64(6),
     week_start Date,
     value UInt16
 ) ENGINE = MergeTree
@@ -270,8 +313,7 @@ The map query is then a direct week lookup:
 ```sql
 SELECT ...
 FROM lab_weekly_summaries
-PREWHERE lab_id = ?
-WHERE week_start = toDate(?)
+WHERE lab_id = ? AND week_start = toDate(?)
 ```
 
 No `GROUP BY`, no `argMax`, no state merge. The snapshot table is rebuilt by
@@ -434,12 +476,13 @@ state-query time for the current lab and week.
 
 ## Limitations
 
-- Both ClickHouse tables are replicas. They are refreshed only by
-  `php artisan ch:load`.
-- The command drops and recreates both tables; there is no incremental sync.
+- The ClickHouse tables are replicas. Run `php artisan migrate` for schema and
+  `php artisan ch:load` to truncate and reload. There is no incremental sync.
+- The ClickHouse migrations drop and recreate their tables; running `migrate`
+  against loader-created tables is the adoption path.
 - PostgreSQL stays the source of truth; writes still go to PostgreSQL only.
-- The 5x benchmark is synthetic per-lab duplication. A full 5x dataset also
-  requires re-seeding PostgreSQL.
+- The `ch:bench --scale=5` benchmark is synthetic per-lab duplication; the
+  loaded 10x stress profile is a separate full dataset.
 - The engine choice is per session, so all tabs share it.
 - The `postgresql()` load needs the Postgres host to be resolvable from the
   ClickHouse server (`lerd-postgres` in lerd, `pgsql` in Sail).
