@@ -1,0 +1,34 @@
+<?php
+
+namespace App\Console\Commands;
+
+use Database\Seeders\DemoStressSeeder;
+use Illuminate\Console\Attributes\Description;
+use Illuminate\Console\Attributes\Signature;
+use Illuminate\Console\Command;
+
+#[Signature('demo:seed {--scale=1 : Observation reading multiplier}')]
+#[Description('Seed the demo stress dataset, optionally with scaled observation readings')]
+class SeedDemoStressCommand extends Command
+{
+    public function handle(): int
+    {
+        $scale = max(1, (int) $this->option('scale'));
+
+        DemoStressSeeder::$observationScale = $scale;
+
+        $this->components->info(sprintf('Seeding demo data with observation scale %d.', $scale));
+        $this->components->warn('This truncates demo organizations, labs, samples, observations, and filters.');
+
+        try {
+            $this->call('db:seed', [
+                '--class' => DemoStressSeeder::class,
+                '--no-interaction' => true,
+            ]);
+        } finally {
+            DemoStressSeeder::$observationScale = 1;
+        }
+
+        return self::SUCCESS;
+    }
+}

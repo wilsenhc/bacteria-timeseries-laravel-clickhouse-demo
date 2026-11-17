@@ -52,7 +52,7 @@ class DemoStressSeeder extends Seeder
         $users = $this->ensureUsers();
         $levelBacteria = Bacteria::query()->where('observation_type', 'level')->get();
         $countBacteria = Bacteria::query()->where('observation_type', 'count')->get();
-        $generator = new ObservationGenerator($levelBacteria, $countBacteria);
+        $generator = new ObservationGenerator($levelBacteria, $countBacteria, self::$observationScale);
 
         $organizations = [
             [
@@ -79,8 +79,8 @@ class DemoStressSeeder extends Seeder
             $organization = $this->createOrganization($organizationData, $users);
 
             foreach (self::LAB_PROFILES as $profile) {
-                // One transaction per lab: thousands of buffers would otherwise pay a commit each.
-                DB::transaction(fn () => $this->createLab($organization, $profile, $generator));
+                // The hierarchy commits once per lab; observations commit in 1,000-row chunks.
+                $this->createLab($organization, $profile, $generator);
                 $output?->progressAdvance();
             }
         }
@@ -197,12 +197,14 @@ class DemoStressSeeder extends Seeder
             'updated_at' => $labCreatedAt,
         ])->saveQuietly();
 
-        $sampleIds = $this->createHierarchyAndSamples($lab);
+        $sampleIds = DB::transaction(fn (): array => $this->createHierarchyAndSamples($lab));
         $weeks = $this->observationWeeks($lab, $timezone);
 
         foreach ($sampleIds as $sampleId) {
             $generator->generateForSample($sampleId, $weeks, $timezone);
         }
+
+        $generator->flush();
     }
 
     /**
