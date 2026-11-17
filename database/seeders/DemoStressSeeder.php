@@ -22,7 +22,9 @@ class DemoStressSeeder extends Seeder
      * Multiplier for readings per sample per week. The normal demo seed uses 1;
      * `demo:seed --scale=10` produces the 100M-row stress dataset.
      */
-    public static int $observationScale = 1;
+    public function __construct(
+        private readonly int $observationScale = 1,
+    ) {}
 
     /**
      * One small, one medium, and one large lab per organization: 10,800 sample
@@ -52,7 +54,7 @@ class DemoStressSeeder extends Seeder
         $users = $this->ensureUsers();
         $levelBacteria = Bacteria::query()->where('observation_type', 'level')->get();
         $countBacteria = Bacteria::query()->where('observation_type', 'count')->get();
-        $generator = new ObservationGenerator($levelBacteria, $countBacteria, self::$observationScale);
+        $generator = new ObservationGenerator($levelBacteria, $countBacteria, $this->observationScale);
 
         $organizations = [
             [
@@ -89,6 +91,8 @@ class DemoStressSeeder extends Seeder
         $this->resetObservationSequences();
 
         $this->call(FilterSeeder::class);
+
+        DB::statement('ANALYZE bacteria_observations');
 
         $output?->progressFinish();
 

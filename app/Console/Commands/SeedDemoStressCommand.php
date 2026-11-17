@@ -15,19 +15,15 @@ class SeedDemoStressCommand extends Command
     {
         $scale = max(1, (int) $this->option('scale'));
 
-        DemoStressSeeder::$observationScale = $scale;
+        $this->laravel->instance(DemoStressSeeder::class, new DemoStressSeeder($scale));
 
         $this->components->info(sprintf('Seeding demo data with observation scale %d.', $scale));
         $this->components->warn('This truncates demo organizations, labs, samples, observations, and filters.');
 
-        try {
-            $this->call('db:seed', [
-                '--class' => DemoStressSeeder::class,
-                '--no-interaction' => true,
-            ]);
-        } finally {
-            DemoStressSeeder::$observationScale = 1;
-        }
+        $this->call('db:seed', [
+            '--class' => DemoStressSeeder::class,
+            '--no-interaction' => true,
+        ]);
 
         return self::SUCCESS;
     }

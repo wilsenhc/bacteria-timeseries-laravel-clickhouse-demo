@@ -34,7 +34,9 @@ test('the observation generator creates valid bacteria result shapes', function 
         expect($observation->bacteriaObservations)->not->toBeEmpty();
 
         foreach ($observation->bacteriaObservations as $result) {
-            expect(($result->growth_level !== null) xor ($result->count !== null))->toBeTrue();
+            expect(($result->growth_level !== null) xor ($result->count !== null))->toBeTrue()
+                ->and($result->sample_id)->toBe($observation->sample_id)
+                ->and($result->observed_at?->equalTo($observation->observed_at))->toBeTrue();
         }
     }
 });

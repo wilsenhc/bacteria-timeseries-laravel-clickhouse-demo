@@ -221,6 +221,8 @@ class ObservationGenerator
             $this->bacteriaObservationBuffer[] = [
                 'id' => $this->bacteriaObservationId++,
                 'observation_id' => $observationId,
+                'sample_id' => $sampleId,
+                'observed_at' => $observedAt->utc()->format('Y-m-d H:i:sP'),
                 'bacteria_id' => $bacteriaId,
                 'growth_level' => $result['growth_level'],
                 'count' => $result['count'],
